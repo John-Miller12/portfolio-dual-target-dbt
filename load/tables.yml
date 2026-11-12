@@ -1,0 +1,51 @@
+# Column contract for the dlt load (design 01, D2).
+#
+# One entry per source table in data/raw/. load/pipeline.py loops over this
+# file and applies each entry with apply_hints(); nothing table-specific lives
+# in Python.
+#
+# Column names are the snake_case names dlt produces from the CSV headers
+# (CustomerID -> customer_id). Snowflake stores them as UPPER_SNAKE (D7).
+#
+# Keys per table:
+#   file          CSV file name in data/raw/
+#   primary_key   column(s); also sets nullable: false
+#   columns       dlt hints: data_type, nullable, precision, scale
+#   checksums     columns whose SUM must match between CSV and target (D6)
+
+customers:
+  file: customers.csv
+  primary_key: [customer_id]
+  columns:
+    customer_id:      {data_type: text,   nullable: false}
+    gender:           {data_type: text,   nullable: false}
+    age:              {data_type: bigint, nullable: false, precision: 32}   # int
+    city:             {data_type: text,   nullable: false}
+    region:           {data_type: text,   nullable: false}
+    customer_segment: {data_type: text,   nullable: false}
+    sign_up_date:     {data_type: date,   nullable: false}
+
+orders:
+  file: orders.csv
+  primary_key: [order_id]
+  columns:
+    order_id:    {data_type: text, nullable: false}
+    customer_id: {data_type: text, nullable: false}
+    order_date:  {data_type: date, nullable: false}
+    order_time:  {data_type: text, nullable: false}   # HH:MM:SS; D8, no TIME on Databricks
+
+order_details:
+  file: order_details.csv
+  primary_key: [order_id, product_id]
+  columns:
+    order_id:      {data_type: text,    nullable: false}
+    product_id:    {data_type: text,    nullable: false}
+    quantity:      {data_type: bigint,  nullable: false, precision: 32}              # int
+    unit_cost:     {data_type: decimal, nullable: false, precision: 18, scale: 2}
+    unit_price:    {data_type: decimal, nullable: false, precision: 18, scale: 2}
+    discount_rate: {data_type: decimal, nullable: false, precision: 5,  scale: 4}
+    is_returned:   {data_type: bigint,  nullable: false, precision: 16}              # smallint, 0/1
+    return_date:   {data_type: date,    nullable: false}   # 9999-12-31 when not returned
+    return_time:   {data_type: text,    nullable: false}   # 00:00:00 when not returned; D8
+    return_reason: {data_type: text,    nullable: false}   # 'None' when not returned
+  checksums: [quantity, unit_cost, unit_price, discount_rate]
