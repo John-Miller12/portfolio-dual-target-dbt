@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 1, proposed**. Section A is a sketch of phase 3. Section B is the proposed phase 2, shaped by what the sketch turned up. Nothing is built yet.
+Status: **revision 2, proposed**. E1–E6 are decided. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2. Nothing is built yet.
 
 Phases in this doc:
 
@@ -35,7 +35,7 @@ The plan is dbt's own semantic YAML (`semantic_models` plus `metrics`). dbt pars
 | **A. Python, outside dbt** (the original plan) | `dbt parse` → Python reads `manifest.json` → writes model files to `models/generated/<platform>/`, committed → `dbt build` | Output is visible in git diffs. Easy to test with pytest. Good error messages when a definition can't be translated. | Two-step build. CI needs a check that generated files are up to date. |
 | **B. dbt-native** | One model file per semantic view: `{{ config(materialized=...) }}{{ render_semantic('orders') }}`. The macro reads `graph.semantic_models` and `graph.metrics` and outputs SQL clauses or YAML depending on `target.type`. | dbt is the generator, so there's one tool and one build, with nothing generated to keep in sync. | Jinja is a weak language for writing a translator. `graph.semantic_models` exists in dbt-core 1.12.6 (checked in source) but isn't documented. Output is only visible in `target/compiled/`. |
 
-**Why this matters now:** under option B the generator lives entirely inside the dbt project. That's why the project directory needs a name that covers the semantic layer too, not just transformation (B1).
+**Why this matters now:** under option B the generator lives entirely inside the dbt project. That's why the project directory is named for dbt as a whole, not for transformation (B1).
 
 ### A4. What the sketch requires from phase 2
 
@@ -51,33 +51,35 @@ These are the requirements that would force rework if phase 2 ignored them.
 | R6 | Names in the semantic layer are what business users and Claude see. | Mart column names are the business names (`customer_segment`, `category_name`, `net_amount`), so the semantic layer doesn't need renames. |
 | R7 | Timestamps differ by platform. Databricks `TIMESTAMP` carries a time zone. Snowflake's default is `TIMESTAMP_NTZ`. | One dispatched macro, `type_timestamp_ntz()`, used wherever a timestamp is built. |
 | R8 | DuckDB has no semantic objects. | Semantic models are disabled on DuckDB. The marts and the plain-SQL parity baseline still run there. |
+| R9 | Readers must never see raw customer IDs ([02A](02a-governance-rbac.md)). Masking at query time would break `COUNT(DISTINCT)` for the reader. | **Pseudonymize `customer_id` into `customer_key` in staging** and drop the raw ID there. The marts and semantic layer only ever see `customer_key`. |
+| R10 | Grants and the semantic schema are managed per platform ([02A](02a-governance-rbac.md)). | A `governance` schema is added. Grant and mask macros are no-ops on DuckDB, so phase 2 runs unchanged locally. |
+
+**Does the time spine cause surprises on Snowflake?** No. It's an ordinary table of dates. Snowflake semantic views never require it. MetricFlow uses it only for time-spine features (cumulative metrics, filling empty periods), and the semantic views don't call MetricFlow. Two things to keep in mind:
+- **Week numbers.** `DATE_TRUNC('week', …)` starts on Monday on all three engines (with Snowflake's default `WEEK_START = 0`). Week-of-year *numbers*, however, depend on `WEEK_OF_YEAR_POLICY` on Snowflake and differ from the ISO weeks Databricks and DuckDB use. So the spine stores only `date_day`, and grains are always computed with `DATE_TRUNC`, never with week-number functions.
+- **Joins.** The spine joins to the fact many-to-one on `order_date`, which is a safe join. It should only be used as the *base* of a query (a LEFT JOIN from the spine) where zero-filled periods are actually wanted. Otherwise empty days would appear in results on one platform and not the other.
 
 ---
 
 ## B. Phase 2 proposal: the dbt project
 
-### B1. Directory name (needs your decision)
+### B1. Directory name: `dbt_scope/` (decided)
 
-`transform/` was rejected because, under option A3-B, the semantic layer would live in this directory too. A `dbt/` folder would shadow the installed `dbt` Python package. The options:
-
-| Name | Notes |
-|---|---|
-| **`analytics/`** (recommended) | Names the job, covering models, tests and the semantic layer. It's a common convention for analytics-engineering repos. |
-| `dbt_project/` | Says what it is, but `dbt_project/dbt_project.yml` repeats itself. |
-| `warehouse/` | Fits the models but not the semantic layer. |
-
-The rest of this doc uses `analytics/`.
+The name is literal and self-describing: everything dbt owns, including the models, tests, governance macros, and possibly the semantic generator (A3, option B). It avoids the shadowing problem with the installed `dbt` package, and it isn't a term dbt reserves. The dbt *project* inside it is named `retail`.
 
 ### B2. Layout
 
 ```
-analytics/
+dbt_scope/
   dbt_project.yml          # project name: retail
   profiles.yml             # duckdb now; snowflake, databricks, admin later; creds via env_var()
-  packages.yml             # dbt_utils only if a test needs it (none yet)
   macros/
     generate_schema_name.sql
-    type_timestamp_ntz.sql # dispatched per adapter (R7)
+    type_timestamp_ntz.sql       # dispatched per adapter (R7)
+    governance/                  # 02A; DuckDB versions in phase 2, others in phase 3
+      pseudonymize.sql           # salted SHA-256, dispatched (R9)
+      apply_raw_masks.sql        # on-run-start; no-op on DuckDB
+      grant_reader.sql           # post-hook for semantic models; no-op on DuckDB
+      bootstrap.sql              # admin target; per-platform implementations
   seeds/                   # products.csv, categories.csv (moved from repo root)
     _seeds.yml
   models/
@@ -91,10 +93,12 @@ analytics/
       dim_customers.sql  dim_products.sql  fct_order_lines.sql
       time_spine_daily.sql
     semantic/              # phase 3; empty for now
-  tests/                   # singular tests (reconciliation)
+  tests/                   # singular tests (reconciliation, ID masking)
 ```
 
-dbt is run from the repo root with `DBT_PROJECT_DIR=analytics` and `DBT_PROFILES_DIR=analytics`, so the same commands work locally and in CI. dbt's packages are added to the existing `pyproject.toml`. `dbt-core`, `dbt-duckdb`, `dbt-snowflake` and `dbt-databricks` resolve together with dlt (core 1.12.6, capped by dbt-databricks 1.13.0).
+dbt is run from the repo root with `DBT_PROJECT_DIR=dbt_scope` and `DBT_PROFILES_DIR=dbt_scope`, so the same commands work locally and in CI. dbt's packages are added to the existing `pyproject.toml`. `dbt-core`, `dbt-duckdb`, `dbt-snowflake` and `dbt-databricks` resolve together with dlt (core 1.12.6, capped by dbt-databricks 1.13.0).
+
+Phase 2 only writes the DuckDB versions of the governance macros: `pseudonymize`, plus no-op versions of the rest. The Snowflake and Databricks versions come when those accounts exist. Because the macro names and call sites are fixed now, phase 3 adds implementations without changing any models.
 
 ### B3. Lineage
 
@@ -108,8 +112,8 @@ flowchart LR
     rcat[(categories · seed)]
   end
   subgraph staging["staging · views"]
-    sc[stg_customers]
-    so[stg_orders]
+    sc["stg_customers<br/>pseudonymize · age_band"]
+    so["stg_orders<br/>pseudonymize"]
     sod[stg_order_details]
     sp[stg_products]
     scat[stg_categories]
@@ -136,29 +140,44 @@ flowchart LR
 
 ### B4. Staging rules
 
-Each staging model has one source, no joins, and one job: produce clean, typed and correctly named columns.
+Each staging model has one source, no joins, and one job: produce clean, typed, correctly named and privacy-safe columns.
 
 | Rule | Applies to |
 |---|---|
 | Select columns explicitly and **drop `_dlt_load_id` and `_dlt_id`** | the three dlt tables |
 | **Cast every column explicitly** to its final type, even ones that already have it, so types never depend on what the loader guessed | all |
+| **Pseudonymize:** `{{ pseudonymize('customer_id') }} as customer_key`. The raw `customer_id` is **not selected**, so it never reaches staging, the marts or the semantic layer (R9, [02A §3](02a-governance-rbac.md)). | `stg_customers`, `stg_orders` |
+| **Band ages** using the usual marketing bands, then **drop the exact age** (see below) | `stg_customers` |
 | **Convert the return placeholders to NULL**: `9999-12-31` → NULL, `00:00:00` → NULL, `'None'` → NULL, but **only when `is_returned = 0`** | `stg_order_details` |
 | **Combine date and time into a timestamp:** `ordered_at` and `returned_at`, using `type_timestamp_ntz()` | `stg_orders`, `stg_order_details` |
 | Convert `is_returned` from 0/1 to a **boolean** | `stg_order_details` |
-| Add a single-column key, **`order_line_id = order_id \|\| '-' \|\| product_id`** (R2). `\|\|` concatenation works on all three engines. | `stg_order_details` |
+| Add a single-column key, **`order_line_id = order_id \|\| '-' \|\| product_id`** (R2) | `stg_order_details` |
 | Seeds are already UPPER_SNAKE. Staging selects them unquoted, so they come out the same as everything else. | `stg_products`, `stg_categories` |
+
+**Age bands.** These are the standard marketing and media bands (the ones used by Nielsen and the major ad platforms). The data runs from 18 to 72, so there's no under-18 band.
+
+| `age_band` | Ages | `age_band_order` |
+|---|---|---|
+| `18-24` | 18–24 | 1 |
+| `25-34` | 25–34 | 2 |
+| `35-44` | 35–44 | 3 |
+| `45-54` | 45–54 | 4 |
+| `55-64` | 55–64 | 5 |
+| `65+` | 65 and over | 6 |
+
+`age_band_order` exists so the bands sort correctly in the semantic layer instead of alphabetically.
 
 ### B5. Marts (star schema)
 
 ```mermaid
 erDiagram
-  fct_order_lines }o--|| dim_customers : customer_id
+  fct_order_lines }o--|| dim_customers : customer_key
   fct_order_lines }o--|| dim_products : product_id
   fct_order_lines }o--|| time_spine_daily : order_date
   fct_order_lines {
     varchar order_line_id PK
     varchar order_id
-    varchar customer_id FK
+    varchar customer_key FK
     varchar product_id FK
     date order_date FK
     timestamp ordered_at
@@ -177,10 +196,10 @@ erDiagram
     decimal returned_net_amount
   }
   dim_customers {
-    varchar customer_id PK
+    varchar customer_key PK
     varchar gender
-    int age
     varchar age_band
+    int age_band_order
     varchar city
     varchar region
     varchar customer_segment
@@ -199,49 +218,56 @@ erDiagram
 
 The fact table keeps order-level attributes on each line (`order_id`, `order_date`, `ordered_at`). Order counts then come from `COUNT(DISTINCT order_id)`, and no separate orders fact is needed for v1.
 
-**Line amounts (R3).** Each amount is computed once and cast to an explicit type.
+**Line amounts (R3, E4).** All amounts are `decimal(18,2)`, in cents. **Rounding happens once, on `discount_amount`, half-up.** Every other amount is a product of whole-cent values, or a sum or difference of them, so it's exact without rounding. That also keeps the parts adding up: `gross = discount + net` and `net = cost + margin` hold exactly on every line.
 
 | Column | Formula | Type |
 |---|---|---|
 | `gross_amount` | `quantity * unit_price` | `decimal(18,2)` |
-| `discount_amount` | `quantity * unit_price * discount_rate` | `decimal(18,6)` |
-| `net_amount` | `gross_amount - discount_amount` | `decimal(18,6)` |
+| `discount_amount` | `round(quantity * unit_price * discount_rate, 2)` | `decimal(18,2)` |
+| `net_amount` | `gross_amount - discount_amount` | `decimal(18,2)` |
 | `cost_amount` | `quantity * unit_cost` | `decimal(18,2)` |
-| `margin_amount` | `net_amount - cost_amount` | `decimal(18,6)` |
-| `returned_net_amount` | `net_amount` if returned, else `0` | `decimal(18,6)` |
+| `margin_amount` | `net_amount - cost_amount` (can be negative) | `decimal(18,2)` |
+| `returned_net_amount` | `net_amount` if returned, else `0` | `decimal(18,2)` |
+
+**The rounding rule matters on this data.** 7,127 lines need rounding, and **630 fall exactly on a half cent**, so a banker's-rounding engine would give different totals. The rule is half away from zero, which is the same as half-up because discounts are never negative. DuckDB `round()` on decimals does this (checked: 2.345 → 2.35). Snowflake's `ROUND` defaults to `HALF_AWAY_FROM_ZERO`, and Databricks' `round` is `HALF_UP`. `round()` is applied to decimal inputs only, never floats. Phase 4 parity tests confirm the totals match.
 
 ### B6. Tests
 
 | Kind | What |
 |---|---|
 | Keys (R2) | `unique` and `not_null` on every mart key. `relationships` from `fct_order_lines` to each dimension. |
+| **ID masking (R9)** | Singular test: no `customer_key` in staging or marts matches `CSTMR%`, and every key is 64 hex characters. `COUNT(DISTINCT customer_key)` = 1,000 = distinct raw IDs, so there are no collisions. |
 | Placeholder handling | `returned_at` and `return_reason` are NULL exactly when `is_returned` is false. This is a singular test. |
-| **Reconciliation** | The fact's `SUM(quantity)` and the sums behind `SUM(gross_amount)` and `SUM(cost_amount)` must equal the raw totals. The phase 1 checksums carry through the whole chain. This is a singular test. |
+| **Reconciliation** | The fact's `SUM(quantity)` equals the raw checksum (81,166). `SUM(quantity * unit_price)` and `SUM(quantity * unit_cost)` equal the same sums computed on raw. The parts add up: `gross = discount + net` and `net = cost + margin` on every line. This is a singular test. |
 | Row counts | `fct_order_lines` has 30,271 rows. `dim_customers` has 1,000. `dim_products` has 100. |
-| Accepted values | `gender`, `region`, `customer_segment`, `return_reason`. These also become dimension values in the semantic layer. |
+| Accepted values | `gender`, `region`, `customer_segment`, `age_band`, `return_reason`. These also become dimension values in the semantic layer. |
 
 ### B7. Configuration
 
-- **Schemas:** `generate_schema_name` uses a model's custom schema exactly as written, on every target, giving `raw`, `staging`, `marts` and `semantic`. The profile's own `schema` is only a fallback.
+- **Schemas:** `generate_schema_name` uses a model's custom schema exactly as written, on every target. That gives `raw`, `staging`, `marts`, `semantic` and `governance` ([02A](02a-governance-rbac.md)). The profile's own `schema` is only a fallback.
 - **Materializations:** staging models are views, marts are tables, and semantic models (phase 3) use the platform materialization.
+- **Hooks:** `on-run-start: "{{ apply_raw_masks() }}"` and, on semantic models, `post-hook: "{{ grant_reader() }}"`. Both are no-ops on DuckDB, so they're wired up from phase 2 onward.
 - **Seeds:** `+schema: raw`, `+quote_columns: false`, with explicit `column_types` for each seed.
 - **Sources:** `raw` schema, no freshness checks (the data is static, D3). `loaded_at_field` can be added later from `_dlt_load_id` if loads become incremental.
 - **DuckDB profile:** `path: "{{ env_var('DBT_DUCKDB_PATH', '.local/dev.duckdb') }}"`. The path is relative to the repo root, which is also where `load/pipeline.py` writes.
+- **Salt on DuckDB:** the `PII_SALT` environment variable, with a fixed fallback for development ([02A §4](02a-governance-rbac.md)).
 
-### B8. Decisions for review
+### B8. Decisions
 
-| # | Decision | Proposal |
+| # | Decision | Outcome |
 |---|---|---|
-| E1 | Name of the dbt directory | `analytics/` (B1) |
-| E2 | Shape of the marts | A star with one fact at line grain. Categories folded into `dim_products`. |
-| E3 | Surrogate key | `order_id \|\| '-' \|\| product_id`. It's readable and portable. The alternative is a hash from `dbt_utils.generate_surrogate_key`. |
-| E4 | Precision of the amounts | Exact (`decimal(18,6)`), with no rounding in the marts. Rounding happens only for display, so parity can be exact. The alternative is rounding to cents in the mart, which needs a single rounding rule all three engines agree on. |
-| E5 | Packages | None for now. Built-in tests plus singular tests are enough. |
-| E6 | Age band | Add `age_band` to `dim_customers` (18–24, 25–34, …), a useful dimension for the semantic layer. |
+| E1 | Name of the dbt directory | **`dbt_scope/`** |
+| E2 | Shape of the marts | **A star with one fact at line grain.** Categories folded into `dim_products`. |
+| E3 | Surrogate key | **`order_id \|\| '-' \|\| product_id`** |
+| E4 | Precision of the amounts | **Rounded to cents in the mart, half-up.** It's applied once, to `discount_amount`, and everything else is derived exactly (B5). |
+| E5 | Packages | **None for now.** |
+| E6 | Age band | **In staging, using marketing bands** (B4). The exact age is dropped (02A, G7, needs your confirmation). |
+
+The governance decisions G1–G7 are in [02A §9](02a-governance-rbac.md).
 
 ### B9. Proposed turns
 
-1. **Skeleton:** `analytics/` with `dbt_project.yml`, `profiles.yml` and the two macros, plus the dbt packages in `pyproject.toml`. Move the seeds and run `dbt seed` and `dbt debug` on DuckDB.
-2. **Sources and staging:** `_sources.yml` and the five staging models with their tests.
+1. **Skeleton:** `dbt_scope/` with `dbt_project.yml`, `profiles.yml`, `generate_schema_name`, `type_timestamp_ntz`, and the DuckDB versions of the governance macros (pseudonymize, plus no-op mask and grant macros). Add the dbt packages to `pyproject.toml`. Move the seeds, then run `dbt debug` and `dbt seed` on DuckDB.
+2. **Sources and staging:** `_sources.yml` and the five staging models with their tests, including the ID-masking test.
 3. **Marts:** the three marts plus `time_spine_daily`, with their tests and the reconciliation tests.
-4. **Close out phase 2:** update this doc as built. Then design 03 (semantic layer) turns section A into a full proposal.
+4. **Close out phase 2:** update this doc as built. Then design 03 (semantic layer) turns section A into a full proposal, including the Snowflake and Databricks governance macros from 02A.
