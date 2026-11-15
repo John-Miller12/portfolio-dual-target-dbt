@@ -1,6 +1,6 @@
 # Design 01: Data loading
 
-Status: **revision 3**. D1–D9 are settled. The data has been acquired and profiled (section 8). No pipeline code yet.
+Status: **revision 4**. D1–D9 are settled. The data has been profiled (section 8). The pipeline is built and passes on DuckDB (section 3).
 
 Scope: everything from the Kaggle download up to `source('raw', ...)` being queryable in dbt, on all three targets. Staging models and anything after them are out of scope.
 
@@ -61,22 +61,28 @@ flowchart LR
 
 ## 3. One pipeline run
 
+As built in `load/pipeline.py`.
+
 ```mermaid
 flowchart TD
-  A["python load/pipeline.py TARGET<br/>duckdb | snowflake | databricks"] --> B["Read load/tables.yml"]
-  B --> C{"For each table"}
-  C --> D["filesystem source → read_csv<br/>data/raw/TABLE.csv"]
-  D --> E["apply_hints from tables.yml<br/>types, nullability, primary key"]
-  E --> F["dlt normalize → load<br/>write_disposition = replace"]
-  F --> G{"Schema contract<br/>columns: freeze"}
-  G -->|"violation"| X["Fail the run"]
-  G -->|"ok"| H{"Row count<br/>warehouse = CSV?"}
-  H -->|"mismatch"| X
-  H -->|"match"| I{"Checksums<br/>SUM per financial column<br/>warehouse = CSV?"}
-  I -->|"mismatch"| X
-  I -->|"match, or none declared"| C
-  C -->|"all tables done"| Z["Exit 0<br/>_dlt_loads records the load_id"]
+  A["uv run python load/pipeline.py TARGET<br/>duckdb | snowflake | databricks"] --> B["Read load/tables.yml"]
+  B --> H{"Pre-check, per table:<br/>CSV headers = contract columns?"}
+  H -->|"no"| X["Fail the run"]
+  H -->|"yes"| P["Drop pending packages<br/>left by a failed earlier run"]
+  P --> R["One dlt run, all tables<br/>filesystem → read_csv as text<br/>→ apply_hints from tables.yml"]
+  R --> N{"Normalize: each value<br/>coerces to its declared type?<br/>contract freezes columns + data_type"}
+  N -->|"no"| X
+  N -->|"yes"| L["Load<br/>write_disposition = replace"]
+  L --> V{"Verify, per table:<br/>row count and checksum SUMs<br/>target = CSV?"}
+  V -->|"mismatch"| X
+  V -->|"all match"| Z["Exit 0<br/>_dlt_loads records the load_id"]
 ```
+
+Implementation notes:
+
+- **Values are read as text** (`dtype=str, keep_default_na=False`), and dlt converts them to the contract types. This avoids float rounding on decimals. It also keeps the `'None'` placeholder as a string. pandas would otherwise read it as null by default.
+- **Bad values fail the load.** A value that can't be converted to its declared type would make dlt create an extra "variant" column, such as `unit_price__v_text`. Freezing `data_type` turns that into a failed load that names the offending row. Tested on a corrupted copy of the data.
+- **Pending packages are dropped at the start.** dlt keeps a failed run's package and retries it on the next run, ignoring new data. Each run is a full reload, so a leftover package is always stale.
 
 ## 4. Column contract (`load/tables.yml`)
 
@@ -141,8 +147,8 @@ pyproject.toml       # uv-managed: dlt[duckdb,snowflake,databricks,filesystem]
 ## 7. Proposed next turns
 
 1. ~~**Acquire:** move the seeds into `seeds/` with UPPER_SNAKE headers and profile the data.~~ Done.
-2. **Scaffold:** `pyproject.toml` with uv, plus `tables.yml`. Review the contract on its own.
-3. **Pipeline:** `pipeline.py` against DuckDB only, with its checks.
+2. ~~**Scaffold:** `pyproject.toml` with uv, plus `tables.yml`.~~ Done.
+3. ~~**Pipeline:** `pipeline.py` against DuckDB only, with its checks.~~ Done.
 4. **dbt init:** `profiles.yml` for DuckDB, the `generate_schema_name` override, `seeds.yml` and `sources.yml`.
 
 ## 8. Data profile
