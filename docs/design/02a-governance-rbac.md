@@ -1,6 +1,6 @@
 # Design 02A: Governance, RBAC and customer ID masking
 
-Status: **revision 2**. G1–G7 are decided. G6 has been revised to use a scoped admin role. Dynamic masking is dropped (G8, needs your confirmation). V1, V3 and V4 are resolved.
+Status: **revision 3**. G1–G8 are decided. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
 
 This is a child of design 02. It covers who can see what on each platform, how customer IDs are hidden, and the one-time admin setup.
 
@@ -125,7 +125,7 @@ flowchart TD
 
 **After provisioning,** your day-to-day role in Snowsight is `PLATFORM_ADMIN`. You only switch to `ACCOUNTADMIN` to rerun provisioning or for billing.
 
-**Interpretation to confirm:** `PLATFORM_ADMIN` holds every privilege dbt and bootstrap need, but **CI doesn't run as it.** CI runs as `TRANSFORMER` and `LOADER`, which have narrower runtime privileges. That way a leaked CI key can't create users or roles.
+**Confirmed:** `PLATFORM_ADMIN` holds every privilege dbt and bootstrap need, but **CI doesn't run as it.** CI runs as `TRANSFORMER` and `LOADER`, which have narrower runtime privileges. That way a leaked CI key can't create users or roles.
 
 ### Databricks: no role switching
 
@@ -219,14 +219,14 @@ sequenceDiagram
 | G5 | How raw masks are applied | ~~An `on-run-start` hook~~. **Superseded by G8**, because there are no raw masks to apply. |
 | G6 | Admin role | **Scoped `PLATFORM_ADMIN`**, provisioned once by `ACCOUNTADMIN` through a dedicated macro and target (section 5) |
 | G7 | Exact age | **Dropped in staging.** Only `age_band` goes downstream. |
-| **G8** | **Dynamic masking on raw** | **Proposed: drop it on both platforms.** Raw is protected by grants, and the phase 4 access check enforces that. Needs your confirmation, because it reverses G5. |
+| **G8** | **Dynamic masking on raw** | **Dropped on both platforms.** Raw is protected by grants, and the phase 4 access check enforces that. This supersedes G5. |
 
 ## 10. To verify when the accounts exist
 
 | # | What, in plain terms | Fallback |
 |---|---|---|
 | ~~V1~~ | ~~Trial accepts Enterprise~~ | **Resolved:** no design dependency on Enterprise |
-| V2 | **Does Databricks Free Edition let us create (a) groups and (b) service principals?** We need them so that CI, MCP and bootstrap each get their own limited identity, instead of everything running as your all-powerful admin user. The Free Edition docs don't say. | Without groups, grant privileges to the identities directly. Without service principals, CI and bootstrap run with your token, and MCP uses a second invited user if allowed. Otherwise MCP also uses your token, and the reader restriction can't be demonstrated on Databricks. **This is the one real gap, and it's noted in the write-up.** |
+| V2 | **Does Databricks Free Edition let us create (a) groups and (b) service principals?** We need them so that CI, MCP and bootstrap each get their own limited identity, instead of everything running as your all-powerful admin user. The Free Edition docs don't say. | Without groups, grant privileges to the identities directly. Without service principals, CI and bootstrap run with your token, and MCP uses a second invited user if allowed. Otherwise MCP also uses your token, and the reader restriction can't be demonstrated on Databricks. **Preferred fallback:** if Free Edition lacks these, use a paid Databricks workspace (trial or pay-as-you-go). Cost guidance: acceptable if setup plus minimal running stays under about $50 CAD. If ongoing upkeep is too high, capture screenshots and recordings of the working system, then decommission it. It must be shown working live at least once. |
 | ~~V3~~ | ~~`secret()` inside a function~~ | **Resolved:** the salt goes in the function body, with `EXECUTE` limited to `transformers` |
 | ~~V4~~ | ~~Masks through semantic views~~ | **Resolved, it doesn't matter:** everything the semantic layer touches is already pseudonymous (control ①) |
-| V5 | Snowflake: can `PLATFORM_ADMIN` do everything `bootstrap()` needs without `MANAGE GRANTS`? This includes future grants in schemas it owns, granting roles it created, and `CREATE USER ... TYPE = SERVICE`. | Add the specific missing privilege to `provision_platform_admin()`, never `MANAGE GRANTS` as a blanket fix |
+| V5 *(deferred to account setup)* | Snowflake: can `PLATFORM_ADMIN` do everything `bootstrap()` needs without `MANAGE GRANTS`? This includes future grants in schemas it owns, granting roles it created, and `CREATE USER ... TYPE = SERVICE`. | Add the specific missing privilege to `provision_platform_admin()`, never `MANAGE GRANTS` as a blanket fix |
