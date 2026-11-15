@@ -1,0 +1,91 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: One row per customer, pseudonymized and age-banded.
+    columns:
+      - name: customer_key
+        description: Salted SHA-256 pseudonym of the raw customer_id (02A section 3).
+        data_tests: [unique, not_null]
+      - name: gender
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Female, Male, Other]
+      - name: age_band
+        description: Marketing age band; exact age is not carried downstream.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['18-24', '25-34', '35-44', '45-54', '55-64', '65+']
+      - name: age_band_order
+        description: Sort key for age_band (1 = youngest).
+        data_tests: [not_null]
+      - name: region
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Aegean, Black Sea, Central Anatolia, Marmara, Mediterranean]
+      - name: customer_segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [Premium, Standard, VIP]
+
+  - name: stg_orders
+    description: One row per order.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: customer_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_key
+      - name: ordered_at
+        data_tests: [not_null]
+
+  - name: stg_order_details
+    description: One row per order line; not-returned placeholders replaced with NULL.
+    columns:
+      - name: order_line_id
+        description: order_id || '-' || product_id.
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_products')
+                field: product_id
+      - name: is_returned
+        data_tests: [not_null]
+
+  - name: stg_products
+    description: One row per product.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: category_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_categories')
+                field: category_id
+
+  - name: stg_categories
+    description: One row per product category.
+    columns:
+      - name: category_id
+        data_tests: [unique, not_null]
