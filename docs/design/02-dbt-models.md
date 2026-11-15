@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 4**. B9 step 1 (skeleton) is built. E1–E6 are decided. Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2. Nothing is built yet.
+Status: **revision 5**. B9 steps 1 (skeleton) and 2 (sources and staging) are built. The YAML file-naming convention is decided (E7). E1–E6 are decided. Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2. Nothing is built yet.
 
 Phases in this doc:
 
@@ -81,15 +81,16 @@ dbt_scope/
       provision_platform_admin.sql  # one-time, as ACCOUNTADMIN (02A §5)
       bootstrap.sql              # as PLATFORM_ADMIN; per-platform implementations
   seeds/                   # products.csv, categories.csv (moved from repo root)
-    _seeds.yml
+    _seeds__seeds.yml
   models/
     staging/
-      _sources.yml
-      _staging.yml
-      stg_customers.sql  stg_orders.sql  stg_order_details.sql
-      stg_products.sql   stg_categories.sql
+      retail/              # one folder per source system (E7)
+        _retail__sources.yml
+        _retail__models.yml
+        stg_customers.sql  stg_orders.sql  stg_order_details.sql
+        stg_products.sql   stg_categories.sql
     marts/
-      _marts.yml
+      _marts__models.yml
       dim_customers.sql  dim_products.sql  fct_order_lines.sql
       time_spine_daily.sql
     semantic/              # phase 3; empty for now
@@ -240,7 +241,7 @@ The fact table keeps order-level attributes on each line (`order_id`, `order_dat
 | Placeholder handling | `returned_at` and `return_reason` are NULL exactly when `is_returned` is false. This is a singular test. |
 | **Reconciliation** | The fact's `SUM(quantity)` equals the raw checksum (81,166). `SUM(quantity * unit_price)` and `SUM(quantity * unit_cost)` equal the same sums computed on raw. The parts add up: `gross = discount + net` and `net = cost + margin` on every line. This is a singular test. |
 | Row counts | `fct_order_lines` has 30,271 rows. `dim_customers` has 1,000. `dim_products` has 100. |
-| Accepted values | `gender`, `region`, `customer_segment`, `age_band`, `return_reason`. These also become dimension values in the semantic layer. |
+| Accepted values | `gender`, `region`, `customer_segment`, `age_band` (tested in staging). `return_reason` has 29 values, so its test is deferred to the marts step. These also become dimension values in the semantic layer. |
 
 ### B7. Configuration
 
@@ -262,13 +263,14 @@ The fact table keeps order-level attributes on each line (`order_id`, `order_dat
 | E3 | Surrogate key | **`order_id \|\| '-' \|\| product_id`** |
 | E4 | Precision of the amounts | **Rounded to cents in the mart, half-up.** It's applied once, to `discount_amount`, and everything else is derived exactly (B5). |
 | E5 | Packages | **None for now.** |
-| E6 | Age band | **In staging, using marketing bands** (B4). The exact age is dropped (02A, G7, needs your confirmation). |
+| E6 | Age band | **In staging, using marketing bands** (B4). The exact age is dropped (02A, G7). |
+| E7 | YAML file naming | **dbt Labs' convention: `_[directory]__[dictionary].yml`.** For example `_retail__sources.yml` and `_retail__models.yml`, with staging in one subfolder per source system. The leading underscore sorts YAML above the SQL files, and the folder name in the file name makes files easy to find by fuzzy search. This is guidance, not a dbt requirement, since dbt reads any file name. Sources: [How we structure our dbt projects: the rest of the project](https://docs.getdbt.com/best-practices/how-we-structure/5-the-rest-of-the-project) ("We've recommended several different naming conventions over the years, most recently calling these `schema.yml` files…") and [Model properties](https://docs.getdbt.com/reference/model-properties) ("You can name these files `whatever_you_want.yml`"). Staging model names stay `stg_<entity>`, not the guide's `stg_<source>__<entity>`, because there's only one source. |
 
 The governance decisions G1–G7 are in [02A §9](02a-governance-rbac.md).
 
 ### B9. Proposed turns
 
 1. ✅ **Skeleton (done):** `dbt_scope/` with `dbt_project.yml`, `profiles.yml`, `generate_schema_name`, `type_timestamp_ntz`, and the DuckDB versions of the governance macros (`pseudonymize`, plus a no-op `grant_reader`). `provision_platform_admin` and `bootstrap` wait for phase 3, when they can be run against real accounts. Add the dbt packages to `pyproject.toml`. Move the seeds, then run `dbt debug` and `dbt seed` on DuckDB.
-2. **Sources and staging:** `_sources.yml` and the five staging models with their tests, including the ID-masking test.
+2. ✅ **Sources and staging (done):** `_retail__sources.yml` and the five staging models with their tests, including the ID-masking test.
 3. **Marts:** the three marts plus `time_spine_daily`, with their tests and the reconciliation tests.
 4. **Close out phase 2:** update this doc as built. Then design 03 (semantic layer) turns section A into a full proposal, including the Snowflake and Databricks governance macros from 02A.
