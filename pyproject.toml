@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "One dbt source, two warehouses: Snowflake and Databricks with a generated semantic layer"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "dbt-core>=1.12,<1.13",
+    "dbt-databricks>=1.12",
+    "dbt-duckdb>=1.11.1",
+    "dbt-snowflake>=1.12.5",
     "dlt[duckdb,snowflake,databricks,filesystem]>=1.30",
     "pandas>=2.2",
     "pyyaml>=6.0",
