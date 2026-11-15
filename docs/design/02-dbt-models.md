@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 2, proposed**. E1–E6 are decided. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2. Nothing is built yet.
+Status: **revision 3, proposed**. E1–E6 are decided. Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2. Nothing is built yet.
 
 Phases in this doc:
 
@@ -52,7 +52,7 @@ These are the requirements that would force rework if phase 2 ignored them.
 | R7 | Timestamps differ by platform. Databricks `TIMESTAMP` carries a time zone. Snowflake's default is `TIMESTAMP_NTZ`. | One dispatched macro, `type_timestamp_ntz()`, used wherever a timestamp is built. |
 | R8 | DuckDB has no semantic objects. | Semantic models are disabled on DuckDB. The marts and the plain-SQL parity baseline still run there. |
 | R9 | Readers must never see raw customer IDs ([02A](02a-governance-rbac.md)). Masking at query time would break `COUNT(DISTINCT)` for the reader. | **Pseudonymize `customer_id` into `customer_key` in staging** and drop the raw ID there. The marts and semantic layer only ever see `customer_key`. |
-| R10 | Grants and the semantic schema are managed per platform ([02A](02a-governance-rbac.md)). | A `governance` schema is added. Grant and mask macros are no-ops on DuckDB, so phase 2 runs unchanged locally. |
+| R10 | Grants and the semantic schema are managed per platform ([02A](02a-governance-rbac.md)). | A `governance` schema is added. The grant and admin macros are no-ops on DuckDB, so phase 2 runs unchanged locally. |
 
 **Does the time spine cause surprises on Snowflake?** No. It's an ordinary table of dates. Snowflake semantic views never require it. MetricFlow uses it only for time-spine features (cumulative metrics, filling empty periods), and the semantic views don't call MetricFlow. Two things to keep in mind:
 - **Week numbers.** `DATE_TRUNC('week', …)` starts on Monday on all three engines (with Snowflake's default `WEEK_START = 0`). Week-of-year *numbers*, however, depend on `WEEK_OF_YEAR_POLICY` on Snowflake and differ from the ISO weeks Databricks and DuckDB use. So the spine stores only `date_day`, and grains are always computed with `DATE_TRUNC`, never with week-number functions.
@@ -77,9 +77,9 @@ dbt_scope/
     type_timestamp_ntz.sql       # dispatched per adapter (R7)
     governance/                  # 02A; DuckDB versions in phase 2, others in phase 3
       pseudonymize.sql           # salted SHA-256, dispatched (R9)
-      apply_raw_masks.sql        # on-run-start; no-op on DuckDB
       grant_reader.sql           # post-hook for semantic models; no-op on DuckDB
-      bootstrap.sql              # admin target; per-platform implementations
+      provision_platform_admin.sql  # one-time, as ACCOUNTADMIN (02A §5)
+      bootstrap.sql              # as PLATFORM_ADMIN; per-platform implementations
   seeds/                   # products.csv, categories.csv (moved from repo root)
     _seeds.yml
   models/
@@ -246,7 +246,8 @@ The fact table keeps order-level attributes on each line (`order_id`, `order_dat
 
 - **Schemas:** `generate_schema_name` uses a model's custom schema exactly as written, on every target. That gives `raw`, `staging`, `marts`, `semantic` and `governance` ([02A](02a-governance-rbac.md)). The profile's own `schema` is only a fallback.
 - **Materializations:** staging models are views, marts are tables, and semantic models (phase 3) use the platform materialization.
-- **Hooks:** `on-run-start: "{{ apply_raw_masks() }}"` and, on semantic models, `post-hook: "{{ grant_reader() }}"`. Both are no-ops on DuckDB, so they're wired up from phase 2 onward.
+- **Hooks:** `post-hook: "{{ grant_reader() }}"` on semantic models. It's a no-op on DuckDB, so it's wired up from phase 2 onward.
+- **Targets:** `duckdb` now. Phase 3 adds `snowflake` (TRANSFORMER), `snowflake_admin` (PLATFORM_ADMIN), `snowflake_provision` (ACCOUNTADMIN, one-time), and the Databricks equivalents ([02A §5](02a-governance-rbac.md)).
 - **Seeds:** `+schema: raw`, `+quote_columns: false`, with explicit `column_types` for each seed.
 - **Sources:** `raw` schema, no freshness checks (the data is static, D3). `loaded_at_field` can be added later from `_dlt_load_id` if loads become incremental.
 - **DuckDB profile:** `path: "{{ env_var('DBT_DUCKDB_PATH', '.local/dev.duckdb') }}"`. The path is relative to the repo root, which is also where `load/pipeline.py` writes.
@@ -267,7 +268,7 @@ The governance decisions G1–G7 are in [02A §9](02a-governance-rbac.md).
 
 ### B9. Proposed turns
 
-1. **Skeleton:** `dbt_scope/` with `dbt_project.yml`, `profiles.yml`, `generate_schema_name`, `type_timestamp_ntz`, and the DuckDB versions of the governance macros (pseudonymize, plus no-op mask and grant macros). Add the dbt packages to `pyproject.toml`. Move the seeds, then run `dbt debug` and `dbt seed` on DuckDB.
+1. **Skeleton:** `dbt_scope/` with `dbt_project.yml`, `profiles.yml`, `generate_schema_name`, `type_timestamp_ntz`, and the DuckDB versions of the governance macros (`pseudonymize`, plus a no-op `grant_reader`). `provision_platform_admin` and `bootstrap` wait for phase 3, when they can be run against real accounts. Add the dbt packages to `pyproject.toml`. Move the seeds, then run `dbt debug` and `dbt seed` on DuckDB.
 2. **Sources and staging:** `_sources.yml` and the five staging models with their tests, including the ID-masking test.
 3. **Marts:** the three marts plus `time_spine_daily`, with their tests and the reconciliation tests.
 4. **Close out phase 2:** update this doc as built. Then design 03 (semantic layer) turns section A into a full proposal, including the Snowflake and Databricks governance macros from 02A.
