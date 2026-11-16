@@ -1,0 +1,21 @@
+name: retail
+version: "1.0.0"
+config-version: 2
+profile: retail
+
+# Run from the repo root with DBT_PROJECT_DIR=dbt_scope DBT_PROFILES_DIR=dbt_scope
+# (design 02, B2). Model folder configs are added in the turns that create them.
+
+models:
+  retail:
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+
+seeds:
+  retail:
+    +schema: raw          # next to the dlt tables (design 01, D4)
+    +quote_columns: false # UPPER_SNAKE headers stay unquoted (design 01, D7)

@@ -1,0 +1,107 @@
+version: 2
+
+models:
+  - name: dim_customers
+    description: One row per customer, keyed by customer_key. Attributes are already banded and pseudonymous.
+    columns:
+      - name: customer_key
+        description: Salted SHA-256 pseudonym of the raw customer_id (02A section 3).
+        data_tests: [unique, not_null]
+      - name: age_band
+        description: Marketing age band. Sorts correctly as text.
+
+  - name: dim_products
+    description: One row per product, with its category name folded in.
+    columns:
+      - name: product_id
+        data_tests: [unique, not_null]
+      - name: category_name
+        data_tests: [not_null]
+
+  - name: fct_order_lines
+    description: One row per order line. Amounts are DECIMAL(18, 2); only discount_amount is rounded.
+    columns:
+      - name: order_line_id
+        description: order_id || '-' || product_id.
+        data_tests: [unique, not_null]
+      - name: order_id
+        data_tests: [not_null]
+      - name: customer_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_key
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_id
+      - name: order_date
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('time_spine_daily')
+                field: date_day
+      - name: gross_amount
+        description: quantity * unit_price.
+      - name: discount_amount
+        description: round(quantity * unit_price * discount_rate, 2), half away from zero. The only rounded amount.
+      - name: net_amount
+        description: gross_amount - discount_amount.
+      - name: cost_amount
+        description: quantity * unit_cost.
+      - name: margin_amount
+        description: net_amount - cost_amount. Can be negative.
+      - name: returned_net_amount
+        description: net_amount when the line was returned, else 0.
+      - name: return_reason
+        description: NULL unless is_returned.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - Broken Package/Leaks
+                  - Bruised/Damaged
+                  - Crushed Package
+                  - Crushed/Broken
+                  - Customer Changed Mind
+                  - Damaged Can
+                  - Damaged Seal
+                  - Damaged Spray Nozzle
+                  - Expired Date
+                  - Freezer Burn
+                  - Leaking Bottle
+                  - Leaking Chemical
+                  - Leaking/Broken Pump
+                  - Molded
+                  - Molded/Rotten
+                  - Packaging Damage
+                  - Packaging Defect
+                  - Quality Dissatisfaction
+                  - Skin Irritation/Allergy
+                  - Spoiled/Expired
+                  - Stale/Hard
+                  - Strong Odor Issue
+                  - Taste Defect
+                  - Thawed/Melted
+                  - Unpleasant Odor
+                  - Unripe Product
+                  - Wrong Flavor Sent
+                  - Wrong Item Sent
+                  - Wrong Product Sent
+      - name: return_category
+        description: >
+          Return reason grouped by cause: Fulfillment Error, Physical Damage, Spoilage,
+          Product Quality, Adverse Reaction, Customer Preference. NULL unless is_returned.
+          Spoilage is about half Expired Date.
+
+  - name: time_spine_daily
+    description: One row per calendar day, 2020-01-01 to 2026-12-31. MetricFlow time spine and date dimension.
+    columns:
+      - name: date_day
+        data_tests: [unique, not_null]

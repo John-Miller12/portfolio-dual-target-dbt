@@ -1,0 +1,14 @@
+# Targets (design 02, B7; 02A section 5). Only duckdb exists in phase 2.
+# Phase 3 adds: snowflake (TRANSFORMER), snowflake_admin (PLATFORM_ADMIN),
+# snowflake_provision (ACCOUNTADMIN, one-time), and Databricks equivalents.
+# Credentials always come from env_var(), never from this file.
+
+retail:
+  target: duckdb
+  outputs:
+    duckdb:
+      type: duckdb
+      # Relative to the repo root, where load/pipeline.py writes the raw tables.
+      path: "{{ env_var('DBT_DUCKDB_PATH', '.local/dev.duckdb') }}"
+      schema: main   # fallback only; every node sets a custom schema
+      threads: 4

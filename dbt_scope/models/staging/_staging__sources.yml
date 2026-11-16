@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: retail
+    description: >
+      Kaggle retail dataset (hyerdrac/retail-data), loaded by load/pipeline.py
+      with dlt into the raw schema (design 01). Types, nullability and row
+      counts are enforced at load time. The two reference tables (products,
+      categories) are dbt seeds, referenced with ref() not source().
+    schema: raw
+    tables:
+      - name: customers
+        description: One row per customer. customer_id is a raw identifier and must not leave staging (02A).
+      - name: orders
+        description: One row per order. customer_id is a raw identifier and must not leave staging (02A).
+      - name: order_details
+        description: >
+          One row per order line, keyed by (order_id, product_id). Lines that
+          were not returned carry placeholders: return_date 9999-12-31,
+          return_time 00:00:00, return_reason 'None'.

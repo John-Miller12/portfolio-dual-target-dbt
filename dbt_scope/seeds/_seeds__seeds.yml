@@ -1,0 +1,37 @@
+version: 2
+
+# `string` is a valid type name on DuckDB, Snowflake and Databricks, so one
+# set of column_types serves every target.
+
+seeds:
+  - name: categories
+    description: Product categories, from the Kaggle retail dataset. Headers renamed to UPPER_SNAKE (design 01, D7).
+    config:
+      column_types:
+        CATEGORY_ID: string
+        CATEGORY_NAME: string
+    columns:
+      - name: CATEGORY_ID
+        data_tests: [unique, not_null]
+      - name: CATEGORY_NAME
+        data_tests: [unique, not_null]
+
+  - name: products
+    description: Products, from the Kaggle retail dataset. Headers renamed to UPPER_SNAKE (design 01, D7).
+    config:
+      column_types:
+        PRODUCT_ID: string
+        PRODUCT_NAME: string
+        CATEGORY_ID: string
+    columns:
+      - name: PRODUCT_ID
+        data_tests: [unique, not_null]
+      - name: PRODUCT_NAME
+        data_tests: [not_null]
+      - name: CATEGORY_ID
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('categories')
+                field: CATEGORY_ID
