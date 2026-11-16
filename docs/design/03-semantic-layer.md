@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 1, sketches only.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. The phase 3 proposal comes in revision 2, after the phase 4 sketch has shown what phase 3 must provide.
+Status: **revision 2, proposed.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 proposal, with decisions H1–H10 open for review.
 
 Phases in this doc:
 
@@ -85,3 +85,290 @@ Each of these is a problem the first-pass flow hits. Revision 2 turns them into 
 - The **MCP reader** queries the semantic objects only (02A). Phase 5 adds a Snowflake MCP server object, plus `USAGE` on it for `READER`.
 - **Synonyms and comments** in the semantic definition are what Cortex Analyst and Genie read. They need to reach both platforms (F4, F5).
 - **Golden answers** double as an evaluation set: does Claude, through MCP, give the golden answer?
+
+---
+
+## C. What phase 4 requires from phase 3
+
+### C1. Requirements
+
+| # | From | Requirement for phase 3 |
+|---|---|---|
+| S1 | P1 | **Every dimension and metric name is unique and snake_case across the whole definition**, so a bare name means the same thing everywhere. Snowflake's logical-table alias is the entity name. One name then maps mechanically: MetricFlow `customer__region` → Snowflake `customer.region` → Databricks `region`. The renderer fails the build on a duplicate. |
+| S2 | P2, F6 | **Time grains are generated as named dimensions**, identical on both platforms: `order_date`, `order_week`, `order_month`, `order_quarter`, `order_year`. Each is `DATE_TRUNC(...)::DATE`. Weeks start on Monday on all three engines (design 02, A4 note), and week-number functions are never used. |
+| S3 | P3 | **Metric types are limited to v1's set:**<br>• Simple metrics (`sum`, `count`, `count_distinct`) whose `expr` is **one fact column**. Any logic becomes a mart column, as design 02 R3 already requires.<br>• Ratios of two simple metrics, rendered as `a / NULLIF(b, 0)`.<br>• No `average`, no filtered metrics, no cumulative metrics. The renderer fails on anything else.<br>Parity compares sums and counts exactly and ratios within a tolerance. |
+| S4 | P6, P7 | **Golden questions are dbt saved queries** (*tested*: they parse and appear in `graph.saved_queries`). dbt validates their metric names at parse time, and the renderer can read them. Filters are limited to a range on the order date and equality or `IN` on a dimension. |
+| S5 | P4, P5, P9 | **Parity needs an answer set computed independently of both warehouses.** A dispatched `semantic_query()` macro renders a golden question as plain SQL on the marts (default), as `SEMANTIC_VIEW(...)` (Snowflake), or as `MEASURE() ... GROUP BY` (Databricks). Design 04 decides the rest. The renderer only has to make that macro possible, which S1–S4 do. |
+| S6 | P8 | Reader grants survive rebuilds: `copy_grants=true` on Snowflake, plus the `grant_reader()` post-hook (02A) on both platforms. |
+| S7 | B4 | Synonyms and descriptions are written once, in the definition, and rendered to both platforms (`WITH SYNONYMS`/`COMMENT` on Snowflake, `synonyms`/`comment` on Databricks). |
+
+### C2. Where this points parity (input to design 04, not decided here)
+
+```mermaid
+flowchart LR
+  sq["golden questions<br/>= dbt saved queries"] --> qm{{"semantic_query()<br/>dispatched macro"}}
+  qm -->|duckdb: plain SQL on marts| ga[("golden answers<br/>committed seed")]
+  qm -->|snowflake: SEMANTIC_VIEW| ts["dbt test<br/>answer = seed"]
+  qm -->|databricks: MEASURE| td["dbt test<br/>answer = seed"]
+  ga --> ts & td
+```
+
+The answers are computed once on DuckDB and committed as a seed. Each platform then proves *its own* semantic layer matches the seed in an ordinary dbt test. This solves several sketch problems:
+- **P5:** platforms are tested independently, so the two warehouses never need to be up in the same job.
+- **P4:** the comparison is SQL inside the warehouse, so identifier case doesn't matter and NULLs are handled once, in the test.
+- **Evidence:** the seed is readable in git ("net revenue in Marmara in 2025 was …").
+- **Phase 5:** the same seed is the answer key for the MCP evaluation.
+
+The same macro can also run the plain-SQL version on each platform's marts. That tells a mart difference apart from a semantic-layer difference.
+
+---
+
+## D. Phase 3 proposal
+
+### D1. How it fits together
+
+```mermaid
+flowchart LR
+  subgraph def["definition · _marts__models.yml"]
+    f["fct_order_lines<br/>entity order_line · metrics"]
+    c["dim_customers<br/>entity customer"]
+    pr["dim_products<br/>entity product"]
+    ts["time_spine_daily<br/>time_spine"]
+  end
+  def -->|dbt parse| g[("graph")]
+  g --> rs{{"semgen macros<br/>render_semantic('sales')"}}
+  rs -->|snowflake__| sv["semantic.sales<br/>SEMANTIC VIEW"]
+  rs -->|databricks__| mv["semantic.sales<br/>METRIC VIEW"]
+  sv & mv -->|grant_reader| rd["reader role · MCP"]
+```
+
+### D2. Layout additions
+
+```
+dbt_scope/
+  packages.yml               # Snowflake-Labs/dbt_semantic_view, pinned (H7)
+  dbt_project.yml            # + semantic folder: schema, materialization by target, enabled on SF/DB only
+  macros/
+    semgen/                  # the renderer (H2); not named "semantic", see note
+      render_semantic.sql    # entry point; snowflake__ and databricks__ implementations
+      semantic_catalog.sql   # reads graph, applies S1–S3 checks, builds the name map
+    governance/              # + snowflake__ and databricks__ versions (02A)
+  models/
+    marts/_marts__models.yml # + the semantic definition (F1)
+    semantic/
+      sales.sql              # one line: {{ render_semantic('sales') }}
+```
+
+- **Folder names:** the macro folder is `semgen/`, not `semantic/`, so no name lives in both `macros/` and `models/`. This follows the spirit of 02A G9.
+- **Configuration:** `models/semantic/` gets folder-level config in `dbt_project.yml`, as staging and marts do:
+  - `+schema: semantic`
+  - `+enabled: "{{ target.type in ['snowflake', 'databricks'] }}"` (R8)
+  - `+materialized`: `semantic_view` on Snowflake and `metric_view` on Databricks
+  - `+copy_grants: true`
+  - `+post-hook: "{{ grant_reader() }}"`
+
+  So `sales.sql` needs no `config()` block.
+
+### D3. The definition
+
+The semantic definition goes into the existing entries in `_marts__models.yml`. The excerpt below is abridged. Column descriptions and tests stay as they are, and synonyms go in `config.meta`.
+
+```yaml
+  - name: fct_order_lines
+    semantic_model: {enabled: true, name: sales}
+    agg_time_dimension: order_date
+    columns:
+      - name: order_line_id
+        entity: {type: primary, name: order_line}
+      - name: customer_key
+        entity: {type: foreign, name: customer}
+      - name: product_id
+        entity: {type: foreign, name: product}
+      - name: order_date
+        granularity: day
+        dimension: {type: time}
+      - name: return_category
+        dimension: {type: categorical, config: {meta: {synonyms: [return type, why returned]}}}
+      - name: return_category_order
+        dimension: {type: categorical, name: return_category_sort}
+    metrics:
+      - name: net_revenue
+        type: simple
+        agg: sum
+        expr: net_amount
+        description: Revenue after discounts, in dollars.
+        config: {meta: {synonyms: [sales, net sales, revenue]}}
+      - name: order_count
+        type: simple
+        agg: count_distinct
+        expr: order_id
+      - name: average_order_value
+        type: ratio
+        numerator: net_revenue
+        denominator: order_count
+
+  - name: dim_customers
+    semantic_model: true
+    columns:
+      - name: customer_key
+        entity: {type: primary, name: customer}
+      - name: region
+        dimension: {type: categorical}
+
+  - name: time_spine_daily
+    time_spine: {standard_granularity_column: date_day}
+    columns:
+      - name: date_day
+        granularity: day
+```
+
+**Name map (S1).** The renderer derives all of these from the definition. Nothing is written twice.
+
+| Definition | MetricFlow | Snowflake semantic view | Databricks metric view |
+|---|---|---|---|
+| entity `order_line` on `fct_order_lines` | `order_line` | logical table `order_line AS {{ ref('fct_order_lines') }} PRIMARY KEY (order_line_id)` | `source:` |
+| entity `customer` on `dim_customers` | `customer` | `customer AS ... PRIMARY KEY (customer_key)` + `RELATIONSHIPS (order_line (customer_key) REFERENCES customer)` | `joins: - name: customer` |
+| dimension `region` | `customer__region` | `customer.region` | `region` (`expr: customer.region`) |
+| time dimension `order_date`, month grain | `order_line__order_date__month` | `order_line.order_month` | `order_month` |
+| metric `net_revenue` | `net_revenue` | `order_line.net_revenue AS SUM(order_line.net_amount)` | `net_revenue` (`expr: SUM(net_amount)`) |
+| ratio `average_order_value` | `average_order_value` | `order_line.average_order_value AS order_line.net_revenue / NULLIF(order_line.order_count, 0)` | `MEASURE(net_revenue) / NULLIF(MEASURE(order_count), 0)` |
+
+### D4. Catalog (v1)
+
+**One semantic object, `semantic.sales`** (H3). It's the star of `fct_order_lines` with `dim_customers` and `dim_products`. `customer_key` is a join key only, never a dimension (02A G4).
+
+| Metric | Type | Definition |
+|---|---|---|
+| `gross_revenue` | sum | `gross_amount` |
+| `discounts` | sum | `discount_amount` |
+| `net_revenue` | sum | `net_amount` |
+| `cost_of_goods` | sum | `cost_amount` |
+| `gross_margin` | sum | `margin_amount` |
+| `returned_revenue` | sum | `returned_net_amount` |
+| `units_sold` | sum | `quantity` |
+| `order_line_count` | count | `order_line_id` |
+| `order_count` | count_distinct | `order_id` |
+| `customer_count` | count_distinct | `customer_key` |
+| `average_order_value` | ratio | `net_revenue / order_count` |
+| `gross_margin_rate` | ratio | `gross_margin / net_revenue` |
+| `return_rate` | ratio | `returned_revenue / net_revenue` (by value, not by line count) |
+
+| Entity | Dimensions |
+|---|---|
+| `order_line` | `order_date`, `order_week`, `order_month`, `order_quarter`, `order_year` (generated, S2); `is_returned`; `return_reason`; `return_category`; `return_category_sort` |
+| `customer` | `gender`, `age_band`, `age_band_sort`, `region`, `city`, `customer_segment` |
+| `product` | `product_name`, `category_name` |
+
+**The sort columns** keep their mart names (`*_order`) but are exposed as `*_sort`. A dimension called "…order" next to an *order* entity is ambiguous, especially for an LLM. The dimension `name:` override (*checked in the dbt source*) does the rename without touching the marts.
+
+### D5. What the renderer produces (abridged)
+
+**Snowflake:** the body of `sales.sql` after rendering, passed through by the package's `semantic_view` materialization.
+
+```sql
+TABLES (
+  order_line AS {{ ref('fct_order_lines') }} PRIMARY KEY (order_line_id),
+  customer   AS {{ ref('dim_customers') }}   PRIMARY KEY (customer_key),
+  product    AS {{ ref('dim_products') }}    PRIMARY KEY (product_id)
+)
+RELATIONSHIPS (
+  order_line (customer_key) REFERENCES customer,
+  order_line (product_id)   REFERENCES product
+)
+DIMENSIONS (
+  order_line.order_month AS DATE_TRUNC('MONTH', order_line.order_date)::DATE,
+  customer.region AS customer.region COMMENT = 'Customer region in Turkey.'
+)
+METRICS (
+  order_line.net_revenue AS SUM(order_line.net_amount)
+    WITH SYNONYMS = ('sales', 'net sales', 'revenue') COMMENT = 'Revenue after discounts, in dollars.',
+  order_line.order_count AS COUNT(DISTINCT order_line.order_id),
+  order_line.average_order_value AS order_line.net_revenue / NULLIF(order_line.order_count, 0)
+)
+COMMENT = 'Retail sales: order lines with customer and product attributes.'
+```
+
+**Databricks:** the YAML body, wrapped by dbt-databricks in `CREATE OR REPLACE VIEW ... WITH METRICS LANGUAGE YAML`.
+
+```yaml
+version: 1.1
+comment: "Retail sales: order lines with customer and product attributes."
+source: {{ ref('fct_order_lines') }}
+joins:
+  - name: customer
+    source: {{ ref('dim_customers') }}
+    on: source.customer_key = customer.customer_key
+  - name: product
+    source: {{ ref('dim_products') }}
+    on: source.product_id = product.product_id
+dimensions:
+  - name: order_month
+    expr: DATE_TRUNC('MONTH', order_date)::DATE
+  - name: region
+    expr: customer.region
+    comment: Customer region in Turkey.
+measures:
+  - name: net_revenue
+    expr: SUM(net_amount)
+    synonyms: [sales, net sales, revenue]
+    comment: Revenue after discounts, in dollars.
+  - name: order_count
+    expr: COUNT(DISTINCT order_id)
+  - name: average_order_value
+    expr: MEASURE(net_revenue) / NULLIF(MEASURE(order_count), 0)
+```
+
+### D6. Generator: dbt-native (H2, recommended)
+
+Design 02 A3 left the choice open. The phase 4 sketch decides it in favor of **option B, dbt-native**:
+
+- **Parity runs inside dbt anyway (C2).** The `semantic_query()` macro and the renderer share one name map, written once in `semantic_catalog.sql`. With option A, Python would generate the views and Jinja would query them, so the name mapping would be written twice.
+- **The risk is gone.** `graph.semantic_models` was the undocumented part. It's now tested (F2), and `graph.saved_queries` works too.
+- **The translation is small.** S1–S3 shrink it to string templating over a fixed set of shapes. The hard cases (filters, cumulative metrics, averages) are refused, not translated.
+- **One tool, one build**, with nothing generated to keep in sync, and analytics-engineering skill on show rather than Python.
+
+What's given up compared with option A:
+- **Rendered output isn't in git.** It's visible with `dbt compile -s sales --target <platform>`, and each phase 3 turn will paste the compiled output for review.
+- **Errors are Jinja errors.** The catalog macro raises explicit `exceptions.raise_compiler_error` messages that name the offending metric or dimension.
+
+### D7. Governance and setup on the real platforms
+
+Phase 3 also builds 02A's Snowflake and Databricks pieces:
+- `provision_platform_admin`, `bootstrap`, `pseudonymize` and `grant_reader`, for both platforms.
+- Setup in the order from 02A §7.
+
+Two additions from this design:
+- **Snowflake region (H10):** choose the trial's region at signup. It must be one where Cortex Analyst and the managed MCP server are available (phase 5), because the region can't be changed later.
+- **Phase 5 grant:** `READER` will also need `USAGE` on the MCP server object. That's added to 02A when phase 5 is designed.
+
+### D8. Decisions
+
+| # | Decision | Recommendation |
+|---|---|---|
+| H1 | Where the definition lives | **In `_marts__models.yml`, latest spec.** Forced by F1. |
+| H2 | Generator | **Option B, dbt-native macros in `macros/semgen/`** (D6). |
+| H3 | Semantic objects | **One star, `semantic.sales`.** More objects only when there's a second fact. |
+| H4 | Metric types and catalog | **S3 subset, 13 metrics** (D4). |
+| H5 | Naming | **Flat, unique, snake_case. Snowflake aliases are entity names. Sort columns are exposed as `*_sort`** (S1, D4). |
+| H6 | Time grains | **Day, week, month, quarter, year, generated as `DATE_TRUNC(...)::DATE`** (S2). |
+| H7 | Snowflake materialization | **The `Snowflake-Labs/dbt_semantic_view` package, pinned to 1.0.6.** This revises design 02 E5 ("no packages"), and `dbt deps` joins the build. The alternative is a 10-line in-house materialization. It's smaller, but it ignores an official package that reviewers will recognize. |
+| H8 | Reader grants | **`grant_reader()` post-hook on both platforms, plus `copy_grants` on Snowflake.** Databricks' native `grants:` config would work too, but one mechanism on both is easier to explain. |
+| H9 | Golden questions | **dbt saved queries** (S4). The answer seed and the parity tests are design 04. |
+| H10 | Snowflake trial region | **A region with Cortex Analyst and the managed MCP server.** Verify at signup. |
+
+### D9. Proposed turns
+
+1. **Definition on DuckDB.** Add the semantic definition and time spine to `_marts__models.yml` and run `dbt parse`. No accounts are needed.
+2. **Renderer on DuckDB.** `semantic_catalog` with the S1–S3 checks, and `render_semantic` for both platforms, verified with `dbt compile --target` against stub profiles. Negative tests: a duplicate name and an `average` metric must fail.
+3. **Snowflake.** Sign up (H10), `provision_platform_admin`, `bootstrap`, load, then build the marts and `semantic.sales`. Query it as `READER`.
+4. **Databricks.** Settle 02A V2, bootstrap, load, then build the marts and `semantic.sales`. Query it as the reader.
+5. **Close out phase 3.** Update this doc as built, then design 04 (parity and CI).
+
+### D10. To verify when the accounts exist
+
+| # | What | Fallback |
+|---|---|---|
+| V6 | A Snowflake metric can refer to another metric in the same logical table, for ratios (F4 says metrics can refer to metrics, but the example was cross-table) | Write the ratio out: `SUM(a) / NULLIF(COUNT(DISTINCT b), 0)` |
+| V7 | Databricks Free Edition's SQL warehouse runs Databricks Runtime 17.2 or later (needed for metric views and YAML 1.1) | YAML 1.0 without synonyms; or the paid-workspace fallback from 02A V2 |
+| V8 | `::DATE` and `NULLIF` inside metric-view `expr` | `CAST(... AS DATE)` |
+| V9 | `AI_VERIFIED_QUERIES` syntax, so golden questions can feed it (phase 4 or 5) | Skip verified queries on Snowflake |
