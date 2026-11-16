@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 6**. B9 steps 1 (skeleton) and 2 (sources and staging) are built. E1–E8 are decided. Revision 6 flattens `models/` to one folder per layer (E7) and sets the cast style (E8). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
+Status: **revision 7**. B9 steps 1–3 (skeleton, staging, marts) are built and pass on DuckDB. E1–E8 are decided. Revision 7 records the marts as built (B5, B6). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
 
 Phases in this doc:
 
@@ -216,6 +216,8 @@ erDiagram
   }
 ```
 
+**Time spine (as built).** `time_spine_daily` uses `dbt.date_spine`, which ships with dbt-core and is dispatched per adapter, so it needs no package (E5). It covers 2020-01-01 to 2026-12-31: whole calendar years from the earliest sign-up to the latest return. `date_spine`'s `end_date` is **exclusive** (`2027-01-01`); verification caught this when the first build stopped at 2026-12-30. A `relationships` test from `fct_order_lines.order_date` to `date_day` fails if the data ever outgrows the range.
+
 The fact table keeps order-level attributes on each line (`order_id`, `order_date`, `ordered_at`). Order counts then come from `COUNT(DISTINCT order_id)`, and no separate orders fact is needed for v1.
 
 **Line amounts (R3, E4).** All amounts are `decimal(18,2)`, in cents. **Rounding happens once, on `discount_amount`, half-up.** Every other amount is a product of whole-cent values, or a sum or difference of them, so it's exact without rounding. That also keeps the parts adding up: `gross = discount + net` and `net = cost + margin` hold exactly on every line.
@@ -239,7 +241,7 @@ The fact table keeps order-level attributes on each line (`order_id`, `order_dat
 | **ID masking (R9)** | Singular test: no `customer_key` in staging or marts matches `CSTMR%`, and every key is 64 hex characters. `COUNT(DISTINCT customer_key)` = 1,000 = distinct raw IDs, so there are no collisions. |
 | Placeholder handling | `returned_at` and `return_reason` are NULL exactly when `is_returned` is false. This is a singular test. |
 | **Reconciliation** | The fact's `SUM(quantity)` equals the raw checksum (81,166). `SUM(quantity * unit_price)` and `SUM(quantity * unit_cost)` equal the same sums computed on raw. The parts add up: `gross = discount + net` and `net = cost + margin` on every line. This is a singular test. |
-| Row counts | `fct_order_lines` has 30,271 rows. `dim_customers` has 1,000. `dim_products` has 100. |
+| Row counts | `fct_order_lines` has 30,271 rows. `dim_customers` has 1,000. `dim_products` has 100. As built, these are compared with raw and the seed rather than hard-coded, inside the reconciliation test (`assert_marts_reconcile`). |
 | Accepted values | `gender`, `region`, `customer_segment`, `age_band` (tested in staging). `return_reason` has 29 values, so its test is deferred to the marts step. These also become dimension values in the semantic layer. |
 
 ### B7. Configuration
@@ -272,5 +274,5 @@ The governance decisions G1–G7 are in [02A §9](02a-governance-rbac.md).
 
 1. ✅ **Skeleton (done):** `dbt_scope/` with `dbt_project.yml`, `profiles.yml`, `generate_schema_name`, `type_timestamp_ntz`, and the DuckDB versions of the governance macros (`pseudonymize`, plus a no-op `grant_reader`). `provision_platform_admin` and `bootstrap` wait for phase 3, when they can be run against real accounts. Add the dbt packages to `pyproject.toml`. Move the seeds, then run `dbt debug` and `dbt seed` on DuckDB.
 2. ✅ **Sources and staging (done):** `_staging__sources.yml` and the five staging models with their tests, including the ID-masking test.
-3. **Marts:** the three marts plus `time_spine_daily`, with their tests and the reconciliation tests.
+3. ✅ **Marts (done):** the three marts plus `time_spine_daily`, `_marts__models.yml`, `assert_marts_reconcile`, and the ID-masking test extended to the marts. 66 checks pass. Totals match an independent half-up recompute from the CSV: gross 791,932.47, discount 29,983.98, net 761,948.49, cost 550,322.59, margin 211,625.90. Negative tests on a damaged copy of the database fail as intended.
 4. **Close out phase 2:** update this doc as built. Then design 03 (semantic layer) turns section A into a full proposal, including the Snowflake and Databricks governance macros from 02A.
