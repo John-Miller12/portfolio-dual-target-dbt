@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 9. Phase 2 is complete:** B9 steps 1–4 are done, and 67 checks pass on DuckDB. E1–E9 are decided. Revision 8 added `return_category` (B4, E9), recorded why the fact uses an inner join (B5), and closed out phase 2. Revision 9 drops the return-category sort column and states that `return_reason` is carried alongside the category. Phase 3 continues in [design 03](03-semantic-layer.md). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
+Status: **revision 10. Phase 2 is complete:** B9 steps 1–4 are done, and 66 checks pass on DuckDB. E1–E9 are decided. Revision 8 added `return_category` (B4, E9), recorded why the fact uses an inner join (B5), and closed out phase 2. Revision 9 dropped the return-category sort column and stated that `return_reason` is carried alongside the category. Revision 10 drops `age_band_order` as well. Phase 3 continues in [design 03](03-semantic-layer.md). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
 
 Phases in this doc:
 
@@ -156,16 +156,16 @@ Each staging model has one source, no joins, and one job: produce clean, typed, 
 
 **Age bands.** These are the standard marketing and media bands (the ones used by Nielsen and the major ad platforms). The data runs from 18 to 72, so there's no under-18 band.
 
-| `age_band` | Ages | `age_band_order` |
-|---|---|---|
-| `18-24` | 18–24 | 1 |
-| `25-34` | 25–34 | 2 |
-| `35-44` | 35–44 | 3 |
-| `45-54` | 45–54 | 4 |
-| `55-64` | 55–64 | 5 |
-| `65+` | 65 and over | 6 |
+| `age_band` | Ages |
+|---|---|
+| `18-24` | 18–24 |
+| `25-34` | 25–34 |
+| `35-44` | 35–44 |
+| `45-54` | 45–54 |
+| `55-64` | 55–64 |
+| `65+` | 65 and over |
 
-`age_band_order` exists so the bands sort correctly in the semantic layer instead of alphabetically.
+The labels sort correctly as text (`'18-24'` < … < `'55-64'` < `'65+'`), so no sort column is needed.
 
 **Return categories (E9).** `stg_order_details` groups the 29 return reasons into six categories by cause. **`return_reason` is kept alongside `return_category`** in staging and the fact, so the detail is always one level down. Both are NULL unless the line was returned. The CASE has **no ELSE**, so a new, unmapped reason leaves a NULL category on a returned line, and `assert_return_fields_consistent` fails. (Checked: removing `Molded` from the mapping fails 28 lines.) There's no sort column: it would add a column for a display preference only.
 
@@ -218,7 +218,6 @@ erDiagram
     varchar customer_key PK
     varchar gender
     varchar age_band
-    int age_band_order
     varchar city
     varchar region
     varchar customer_segment
