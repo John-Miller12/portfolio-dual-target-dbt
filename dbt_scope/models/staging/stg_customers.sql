@@ -19,14 +19,6 @@ select
         when age between 55 and 64 then '55-64'
         when age >= 65             then '65+'
     end                                as age_band,
-    case
-        when age between 18 and 24 then 1
-        when age between 25 and 34 then 2
-        when age between 35 and 44 then 3
-        when age between 45 and 54 then 4
-        when age between 55 and 64 then 5
-        when age >= 65             then 6
-    end                                as age_band_order,
     city::STRING                       as city,
     region::STRING                     as region,
     customer_segment::STRING           as customer_segment,

@@ -8,7 +8,7 @@ models:
         description: Salted SHA-256 pseudonym of the raw customer_id (02A section 3).
         data_tests: [unique, not_null]
       - name: age_band
-        description: Marketing age band; sort with age_band_order.
+        description: Marketing age band. Sorts correctly as text.
 
   - name: dim_products
     description: One row per product, with its category name folded in.
