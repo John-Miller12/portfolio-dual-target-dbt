@@ -94,6 +94,13 @@ models:
                   - Wrong Flavor Sent
                   - Wrong Item Sent
                   - Wrong Product Sent
+      - name: return_category
+        description: >
+          Return reason grouped by cause: Fulfillment Error, Physical Damage, Spoilage,
+          Product Quality, Adverse Reaction, Customer Preference. NULL unless is_returned.
+          Spoilage is about half Expired Date.
+      - name: return_category_order
+        description: Sort key for return_category (1 = Fulfillment Error).
 
   - name: time_spine_daily
     description: One row per calendar day, 2020-01-01 to 2026-12-31. MetricFlow time spine and date dimension.

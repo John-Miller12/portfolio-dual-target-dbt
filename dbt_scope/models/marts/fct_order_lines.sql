@@ -38,7 +38,9 @@ lines as (
         (order_details.quantity * order_details.unit_cost)::DECIMAL(18, 2)   as cost_amount,
         order_details.is_returned,
         order_details.returned_at,
-        order_details.return_reason
+        order_details.return_reason,
+        order_details.return_category,
+        order_details.return_category_order
 
     from order_details
     inner join orders
@@ -75,6 +77,8 @@ select
     is_returned,
     returned_at,
     return_reason,
+    return_category,
+    return_category_order,
     (case when is_returned then net_amount else 0 end)::DECIMAL(18, 2)
                                                 as returned_net_amount
 

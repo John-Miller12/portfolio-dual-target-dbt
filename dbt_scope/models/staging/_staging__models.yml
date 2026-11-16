@@ -70,6 +70,23 @@ models:
                 field: product_id
       - name: is_returned
         data_tests: [not_null]
+      - name: return_category
+        description: >
+          Groups the 29 return reasons by cause, ordered from what operations control
+          to the customer (design 02, B4). NULL unless is_returned. Unpleasant Odor (meat)
+          is Spoilage, while Strong Odor Issue (household cleaning) is Product Quality.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - Fulfillment Error
+                  - Physical Damage
+                  - Spoilage
+                  - Product Quality
+                  - Adverse Reaction
+                  - Customer Preference
+      - name: return_category_order
+        description: Sort key for return_category (1 = Fulfillment Error).
 
   - name: stg_products
     description: One row per product.
