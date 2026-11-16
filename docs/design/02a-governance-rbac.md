@@ -1,6 +1,6 @@
 # Design 02A: Governance, RBAC and customer ID masking
 
-Status: **revision 3**. G1–G8 are decided. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
+Status: **revision 4**. G1–G9 are decided. Revision 4 adds G9, where the name `governance` may live in the dbt project. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
 
 This is a child of design 02. It covers who can see what on each platform, how customer IDs are hidden, and the one-time admin setup.
 
@@ -220,6 +220,7 @@ sequenceDiagram
 | G6 | Admin role | **Scoped `PLATFORM_ADMIN`**, provisioned once by `ACCOUNTADMIN` through a dedicated macro and target (section 5) |
 | G7 | Exact age | **Dropped in staging.** Only `age_band` goes downstream. |
 | **G8** | **Dynamic masking on raw** | **Dropped on both platforms.** Raw is protected by grants, and the phase 4 access check enforces that. This supersedes G5. |
+| **G9** | **Where the name `governance` lives in the dbt project** | **Either `macros/governance/` or `models/governance/`, never both.** It's the macros folder today. If governance-owned models are ever needed, the governance folder moves or is renamed so the name still points to one place in the project. The warehouse schema `governance`, which holds the pseudonymize function, deliberately shares the name with whichever folder it is. |
 
 ## 10. To verify when the accounts exist
 
