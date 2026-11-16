@@ -17,7 +17,6 @@ where
             returned_at is null
             or return_reason is null
             or return_category is null
-            or return_category_order is null
             or extract(year from returned_at) = 9999
             or return_reason = 'None'
         )
