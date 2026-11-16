@@ -8,8 +8,8 @@ with source as (
 )
 
 select
-    cast(product_id as string)    as product_id,
-    cast(product_name as string)  as product_name,
-    cast(category_id as string)   as category_id
+    product_id::STRING    as product_id,
+    product_name::STRING  as product_name,
+    category_id::STRING   as category_id
 
 from source

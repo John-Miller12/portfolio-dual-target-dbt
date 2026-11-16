@@ -24,7 +24,7 @@ collisions as (
 
     select
         'stg_customers' as model,
-        cast(count(distinct customer_key) as string) as customer_key,
+        count(distinct customer_key)::STRING as customer_key,
         'distinct keys != distinct raw ids' as reason
     from {{ ref('stg_customers') }}
     having count(distinct customer_key) != (

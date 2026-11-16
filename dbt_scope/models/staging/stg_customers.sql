@@ -10,7 +10,7 @@ with source as (
 
 select
     {{ pseudonymize('customer_id') }}  as customer_key,
-    cast(gender as string)             as gender,
+    gender::STRING                     as gender,
     case
         when age between 18 and 24 then '18-24'
         when age between 25 and 34 then '25-34'
@@ -27,9 +27,9 @@ select
         when age between 55 and 64 then 5
         when age >= 65             then 6
     end                                as age_band_order,
-    cast(city as string)               as city,
-    cast(region as string)             as region,
-    cast(customer_segment as string)   as customer_segment,
-    cast(sign_up_date as date)         as sign_up_date
+    city::STRING                       as city,
+    region::STRING                     as region,
+    customer_segment::STRING           as customer_segment,
+    sign_up_date::DATE                 as sign_up_date
 
 from source

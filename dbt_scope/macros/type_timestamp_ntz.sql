@@ -7,8 +7,8 @@
     {{ return(adapter.dispatch('type_timestamp_ntz', 'retail')()) }}
 {% endmacro %}
 
-{% macro default__type_timestamp_ntz() %}timestamp{% endmacro %}
+{% macro default__type_timestamp_ntz() %}TIMESTAMP{% endmacro %}
 
-{% macro snowflake__type_timestamp_ntz() %}timestamp_ntz{% endmacro %}
+{% macro snowflake__type_timestamp_ntz() %}TIMESTAMP_NTZ{% endmacro %}
 
-{% macro databricks__type_timestamp_ntz() %}timestamp_ntz{% endmacro %}
+{% macro databricks__type_timestamp_ntz() %}TIMESTAMP_NTZ{% endmacro %}

@@ -7,7 +7,7 @@ with source as (
 )
 
 select
-    cast(category_id as string)    as category_id,
-    cast(category_name as string)  as category_name
+    category_id::STRING    as category_id,
+    category_name::STRING  as category_name
 
 from source
