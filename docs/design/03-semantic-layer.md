@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 3, proposed.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 proposal, with decisions H1–H10 open for review. Revision 3 follows design 02 revision 9: `return_reason` and `return_category` are both dimensions, and there's no return-category sort column.
+Status: **revision 4, proposed.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 proposal, with decisions H1–H10 open for review. Revision 3 follows design 02 revision 9: `return_reason` and `return_category` are both dimensions, and there's no return-category sort column. Revision 4 follows design 02 revision 10: no age-band sort column either.
 
 Phases in this doc:
 
@@ -256,10 +256,10 @@ The semantic definition goes into the existing entries in `_marts__models.yml`. 
 | Entity | Dimensions |
 |---|---|
 | `order_line` | `order_date`, `order_week`, `order_month`, `order_quarter`, `order_year` (generated, S2); `is_returned`; `return_reason`; `return_category` |
-| `customer` | `gender`, `age_band`, `age_band_sort`, `region`, `city`, `customer_segment` |
+| `customer` | `gender`, `age_band`, `region`, `city`, `customer_segment` |
 | `product` | `product_name`, `category_name` |
 
-**The age-band sort column** keeps its mart name (`age_band_order`) but is exposed as `age_band_sort`. A dimension called "…order" next to an *order* entity is ambiguous, especially for an LLM. The dimension `name:` override (*checked in the dbt source*) does the rename without touching the marts. `return_reason` and `return_category` are both dimensions, so a question can be answered at either level.
+**No sort columns.** `age_band` labels sort correctly as text, and return categories have no natural order. `return_reason` and `return_category` are both dimensions, so a question can be answered at either level.
 
 ### D5. What the renderer produces (abridged)
 
@@ -349,7 +349,7 @@ Two additions from this design:
 | H2 | Generator | **Option B, dbt-native macros in `macros/semgen/`** (D6). |
 | H3 | Semantic objects | **One star, `semantic.sales`.** More objects only when there's a second fact. |
 | H4 | Metric types and catalog | **S3 subset, 13 metrics** (D4). |
-| H5 | Naming | **Flat, unique, snake_case. Snowflake aliases are entity names. `age_band_order` is exposed as `age_band_sort`** (S1, D4). |
+| H5 | Naming | **Flat, unique, snake_case. Snowflake aliases are entity names. No sort columns** (S1, D4). |
 | H6 | Time grains | **Day, week, month, quarter, year, generated as `DATE_TRUNC(...)::DATE`** (S2). |
 | H7 | Snowflake materialization | **The `Snowflake-Labs/dbt_semantic_view` package, pinned to 1.0.6.** This revises design 02 E5 ("no packages"), and `dbt deps` joins the build. The alternative is a 10-line in-house materialization. It's smaller, but it ignores an official package that reviewers will recognize. |
 | H8 | Reader grants | **`grant_reader()` post-hook on both platforms, plus `copy_grants` on Snowflake.** Databricks' native `grants:` config would work too, but one mechanism on both is easier to explain. |
