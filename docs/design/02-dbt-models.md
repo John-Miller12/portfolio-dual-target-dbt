@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 7**. B9 steps 1–3 (skeleton, staging, marts) are built and pass on DuckDB. E1–E8 are decided. Revision 7 records the marts as built (B5, B6). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
+Status: **revision 8. Phase 2 is complete:** B9 steps 1–4 are done, and 67 checks pass on DuckDB. E1–E9 are decided. Revision 8 adds `return_category` (B4, E9), records why the fact uses an inner join (B5), and closes out phase 2. Phase 3 continues in [design 03](03-semantic-layer.md). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
 
 Phases in this doc:
 
@@ -167,6 +167,25 @@ Each staging model has one source, no joins, and one job: produce clean, typed, 
 
 `age_band_order` exists so the bands sort correctly in the semantic layer instead of alphabetically.
 
+**Return categories (E9).** `stg_order_details` groups the 29 return reasons into six categories by cause. `return_category_order` sorts them from what operations control to the customer, so a "whose fault" chart reads left to right. Both columns are NULL unless the line was returned. The CASE has **no ELSE**, so a new, unmapped reason leaves a NULL category on a returned line, and `assert_return_fields_consistent` fails. (Checked: removing `Molded` from the mapping fails 28 lines.)
+
+| Order | `return_category` | Rule | Return reasons | Lines |
+|---|---|---|---|---|
+| 1 | Fulfillment Error | We sent something other than what was ordered | Wrong Item Sent, Wrong Product Sent, Wrong Flavor Sent | 249 |
+| 2 | Physical Damage | Arrived broken, crushed, leaking or with a faulty dispenser, whether in transit or from the factory | Packaging Damage, Packaging Defect, Broken Package/Leaks, Crushed Package, Crushed/Broken, Damaged Can, Damaged Seal, Leaking Bottle, Leaking Chemical, Damaged Spray Nozzle, Leaking/Broken Pump, Bruised/Damaged | 420 |
+| 3 | Spoilage | Went bad through age, rot or temperature | Expired Date, Spoiled/Expired, Molded, Molded/Rotten, Stale/Hard, Unpleasant Odor, Freezer Burn, Thawed/Melted | 310 |
+| 4 | Product Quality | Intact and in date, but didn't meet expectations | Quality Dissatisfaction, Taste Defect, Strong Odor Issue, Unripe Product | 117 |
+| 5 | Adverse Reaction | The product caused a bodily reaction | Skin Irritation/Allergy | 29 |
+| 6 | Customer Preference | Nothing was wrong with the product or the order | Customer Changed Mind | 299 |
+
+Notes on the mapping:
+- **Physical Damage isn't split** into transit damage and supplier defects. A label like "Leaking Bottle" doesn't say which it was, so a split would rest on guesses.
+- **Odor is split on purpose.** Unpleasant Odor on meat means it has gone off (Spoilage). Strong Odor Issue on a cleaning product is a formulation problem (Product Quality).
+- **Freezer Burn and Thawed/Melted are Spoilage.** A separate cold-chain category would have only 28 lines.
+- **Spoilage is about half Expired Date** (156 of 310), so its trend mostly reflects date checks.
+- **Labels never repeat a raw reason** (for example, not "Customer Changed Mind"). An LLM over MCP could otherwise filter on the wrong column.
+- **Not built: a "controllable return" flag.** The question "our fault or theirs?" needs one, but that's a business definition this data can't settle.
+
 ### B5. Marts (star schema)
 
 ```mermaid
@@ -218,6 +237,8 @@ erDiagram
 
 **Time spine (as built).** `time_spine_daily` uses `dbt.date_spine`, which ships with dbt-core and is dispatched per adapter, so it needs no package (E5). It covers 2020-01-01 to 2026-12-31: whole calendar years from the earliest sign-up to the latest return. `date_spine`'s `end_date` is **exclusive** (`2027-01-01`); verification caught this when the first build stopped at 2026-12-30. A `relationships` test from `fct_order_lines.order_date` to `date_day` fails if the data ever outgrows the range.
 
+**Join direction (as built).** `fct_order_lines` is at line grain and joins `stg_order_details` to `stg_orders`, a many-to-one lookup of `customer_key`, `order_date` and `ordered_at`. It's an **inner join**. Starting from orders (`orders LEFT JOIN lines`) would suit an order-grain model, but here it would produce a row with a NULL `order_line_id` for any order with no lines, which breaks the grain. On this data, inner and `lines LEFT JOIN orders` give identical results: every order has lines and every line has an order. They differ only on bad data. An inner join drops an orphan line, and `assert_marts_reconcile` (row count against raw) and the staging `relationships` test catch it. A left join keeps the line with a NULL `customer_key`, and the `not_null` test catches it.
+
 The fact table keeps order-level attributes on each line (`order_id`, `order_date`, `ordered_at`). Order counts then come from `COUNT(DISTINCT order_id)`, and no separate orders fact is needed for v1.
 
 **Line amounts (R3, E4).** All amounts are `decimal(18,2)`, in cents. **Rounding happens once, on `discount_amount`, half-up.** Every other amount is a product of whole-cent values, or a sum or difference of them, so it's exact without rounding. That also keeps the parts adding up: `gross = discount + net` and `net = cost + margin` hold exactly on every line.
@@ -241,6 +262,7 @@ The fact table keeps order-level attributes on each line (`order_id`, `order_dat
 | **ID masking (R9)** | Singular test: no `customer_key` in staging or marts matches `CSTMR%`, and every key is 64 hex characters. `COUNT(DISTINCT customer_key)` = 1,000 = distinct raw IDs, so there are no collisions. |
 | Placeholder handling | `returned_at` and `return_reason` are NULL exactly when `is_returned` is false. This is a singular test. |
 | **Reconciliation** | The fact's `SUM(quantity)` equals the raw checksum (81,166). `SUM(quantity * unit_price)` and `SUM(quantity * unit_cost)` equal the same sums computed on raw. The parts add up: `gross = discount + net` and `net = cost + margin` on every line. This is a singular test. |
+| Hex format of `customer_key` | **Not tested, by choice.** The length-64 and not-`CSTMR` checks are enough, and a hex regex differs on each engine. |
 | Row counts | `fct_order_lines` has 30,271 rows. `dim_customers` has 1,000. `dim_products` has 100. As built, these are compared with raw and the seed rather than hard-coded, inside the reconciliation test (`assert_marts_reconcile`). |
 | Accepted values | `gender`, `region`, `customer_segment`, `age_band` (tested in staging). `return_reason` has 29 values, so its test is deferred to the marts step. These also become dimension values in the semantic layer. |
 
@@ -267,6 +289,7 @@ The fact table keeps order-level attributes on each line (`order_id`, `order_dat
 | E6 | Age band | **In staging, using marketing bands** (B4). The exact age is dropped (02A, G7). |
 | E7 | Folder layout and YAML file naming | **Flat and layer-first: `models/staging/` and `models/marts/`, with no source or project-name subfolder.** dbt Labs' guide groups staging by source system, which pays off with several sources. There's one here, so that level only adds depth. `retail/staging/` was rejected because `retail` is already the project name, which would give a doubled `models: retail: retail:` key in `dbt_project.yml`. Configuration and selection (`dbt build -s staging`) also work per layer. **YAML files follow dbt Labs' `_[directory]__[dictionary].yml`:** `_staging__sources.yml`, `_staging__models.yml`, `_marts__models.yml`. The leading underscore sorts YAML above the SQL files, and the folder name in the file name makes files easy to find by fuzzy search. This is guidance, not a dbt requirement, since dbt reads any file name. Sources: [How we structure our dbt projects: the rest of the project](https://docs.getdbt.com/best-practices/how-we-structure/5-the-rest-of-the-project) ("We've recommended several different naming conventions over the years, most recently calling these `schema.yml` files…") and [Model properties](https://docs.getdbt.com/reference/model-properties) ("You can name these files `whatever_you_want.yml`"). Staging model names stay `stg_<entity>`, not the guide's `stg_<source>__<entity>`, because there's only one source. |
 | E8 | Cast style | **The `::` shorthand with uppercase types**, e.g. `gender::STRING`, `unit_price::DECIMAL(18, 2)`. dbt doesn't translate SQL between dialects, so the syntax must be native everywhere, and `::` is native on Snowflake, DuckDB and Databricks ([Databricks docs](https://docs.databricks.com/aws/en/sql/language-manual/functions/coloncolonsign)). `::` binds more tightly than `\|\|` and arithmetic, so **concatenations and other multi-part expressions are wrapped in parentheses** before the cast, e.g. `(order_date::STRING \|\| ' ' \|\| order_time)::{{ type_timestamp_ntz() }}`. |
+| E9 | Return categories | **Six categories in staging, by cause, with a sort column** (B4). They're built with a CASE that has no ELSE, so an unmapped reason fails a test. A subagent proposed the grouping, and the main session reviewed it, renaming "Product Safety" to "Adverse Reaction": a skin reaction can be specific to the customer, so "safety" claimed too much. |
 
 The governance decisions G1–G7 are in [02A §9](02a-governance-rbac.md).
 
@@ -275,4 +298,4 @@ The governance decisions G1–G7 are in [02A §9](02a-governance-rbac.md).
 1. ✅ **Skeleton (done):** `dbt_scope/` with `dbt_project.yml`, `profiles.yml`, `generate_schema_name`, `type_timestamp_ntz`, and the DuckDB versions of the governance macros (`pseudonymize`, plus a no-op `grant_reader`). `provision_platform_admin` and `bootstrap` wait for phase 3, when they can be run against real accounts. Add the dbt packages to `pyproject.toml`. Move the seeds, then run `dbt debug` and `dbt seed` on DuckDB.
 2. ✅ **Sources and staging (done):** `_staging__sources.yml` and the five staging models with their tests, including the ID-masking test.
 3. ✅ **Marts (done):** the three marts plus `time_spine_daily`, `_marts__models.yml`, `assert_marts_reconcile`, and the ID-masking test extended to the marts. 66 checks pass. Totals match an independent half-up recompute from the CSV: gross 791,932.47, discount 29,983.98, net 761,948.49, cost 550,322.59, margin 211,625.90. Negative tests on a damaged copy of the database fail as intended.
-4. **Close out phase 2:** update this doc as built. Then design 03 (semantic layer) turns section A into a full proposal, including the Snowflake and Databricks governance macros from 02A.
+4. ✅ **Close out phase 2 (done):** this doc is updated as built. Section A continues in [design 03](03-semantic-layer.md), which turns it into a full phase 3 proposal, including the Snowflake and Databricks governance macros from 02A.
