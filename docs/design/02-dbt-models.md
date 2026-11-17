@@ -1,6 +1,6 @@
 # Design 02: dbt models (and a sketch of the semantic layer)
 
-Status: **revision 10. Phase 2 is complete:** B9 steps 1–4 are done, and 66 checks pass on DuckDB. E1–E9 are decided. Revision 8 added `return_category` (B4, E9), recorded why the fact uses an inner join (B5), and closed out phase 2. Revision 9 dropped the return-category sort column and stated that `return_reason` is carried alongside the category. Revision 10 drops `age_band_order` as well. Phase 3 continues in [design 03](03-semantic-layer.md). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
+Status: **revision 11. Phase 2 is complete:** B9 steps 1–4 are done, and 66 checks pass on DuckDB. E1–E9 are decided. Revision 8 added `return_category` (B4, E9), recorded why the fact uses an inner join (B5), and closed out phase 2. Revision 9 dropped the return-category sort column and stated that `return_reason` is carried alongside the category. Revision 10 dropped `age_band_order` as well. Revision 11 drops `city` in staging (02A G10) and adds `return_category` to the marts diagram, where it had been missed. Phase 3 continues in [design 03](03-semantic-layer.md). Revision 3 follows 02A revision 2: no raw masks, and a scoped admin role. Governance, RBAC and ID masking are in the child doc [02A](02a-governance-rbac.md), and this doc includes their effects on phase 2.
 
 Phases in this doc:
 
@@ -148,6 +148,7 @@ Each staging model has one source, no joins, and one job: produce clean, typed, 
 | **Cast every column explicitly** to its final type, even ones that already have it, so types never depend on what the loader guessed | all |
 | **Pseudonymize:** `{{ pseudonymize('customer_id') }} as customer_key`. The raw `customer_id` is **not selected**, so it never reaches staging, the marts or the semantic layer (R9, [02A §3](02a-governance-rbac.md)). | `stg_customers`, `stg_orders` |
 | **Band ages** using the usual marketing bands, then **drop the exact age** (see below) | `stg_customers` |
+| **Drop `city`**: too precise and potentially identifying; `region` is the location attribute ([02A G10](02a-governance-rbac.md)) | `stg_customers` |
 | **Convert the return placeholders to NULL**: `9999-12-31` → NULL, `00:00:00` → NULL, `'None'` → NULL, but **only when `is_returned = 0`** | `stg_order_details` |
 | **Combine date and time into a timestamp:** `ordered_at` and `returned_at`, using `type_timestamp_ntz()` | `stg_orders`, `stg_order_details` |
 | Convert `is_returned` from 0/1 to a **boolean** | `stg_order_details` |
@@ -212,13 +213,13 @@ erDiagram
     boolean is_returned
     timestamp returned_at
     varchar return_reason
+    varchar return_category
     decimal returned_net_amount
   }
   dim_customers {
     varchar customer_key PK
     varchar gender
     varchar age_band
-    varchar city
     varchar region
     varchar customer_segment
     date sign_up_date
