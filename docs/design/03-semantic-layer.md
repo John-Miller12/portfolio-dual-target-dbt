@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 5, proposed.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 proposal, with decisions H1–H10 open for review. Revision 3 follows design 02 revision 9: `return_reason` and `return_category` are both dimensions, and there's no return-category sort column. Revision 4 follows design 02 revision 10: no age-band sort column either. Revision 5 removes `city` (02A G10), justifies the ratio denominators, adds a unit-based return rate, and sets rules for dimensions that overlap (D4, H11–H13).
+Status: **revision 6. H1–H13 are decided** (approved 2026-11-17), and phase 3 is under way (D9). Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 records approval: H13 stays "before returns" for v1, and H11 is approved as proposed.
 
 Phases in this doc:
 
@@ -371,7 +371,7 @@ Two additions from this design:
 
 ### D8. Decisions
 
-| # | Decision | Recommendation |
+| # | Decision | Outcome (approved 2026-11-17) |
 |---|---|---|
 | H1 | Where the definition lives | **In `_marts__models.yml`, latest spec.** Forced by F1. |
 | H2 | Generator | **Option B, dbt-native macros in `macros/semgen/`** (D6). |
