@@ -11,7 +11,6 @@ select
     customer_key,
     gender,
     age_band,
-    city,
     region,
     customer_segment,
     sign_up_date
