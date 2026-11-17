@@ -1,29 +1,64 @@
 version: 2
 
+# Marts docs, tests and the semantic definition (design 03, latest dbt spec).
+# Entities and dimensions sit on their columns; metrics sit on the fact.
+# Synonyms live in config.meta and must never overlap between two fields
+# (design 03, H12). "Net" means after discounts, before returns (H13).
+
 models:
   - name: dim_customers
     description: One row per customer, keyed by customer_key. Attributes are already banded and pseudonymous.
+    semantic_model: true
     columns:
       - name: customer_key
-        description: Salted SHA-256 pseudonym of the raw customer_id (02A section 3).
+        description: Salted SHA-256 pseudonym of the raw customer_id (02A section 3). A join key only, never a dimension (02A G4).
         data_tests: [unique, not_null]
+        entity: {type: primary, name: customer}
+      - name: gender
+        description: Customer gender as recorded (Female, Male, Other).
+        dimension: {type: categorical}
       - name: age_band
-        description: Marketing age band. Sorts correctly as text.
+        description: Marketing age band (18-24 to 65+). Sorts correctly as text.
+        dimension:
+          type: categorical
+          config: {meta: {synonyms: [age group, age range]}}
+      - name: region
+        description: Geographic region of the customer (5 regions). The only location attribute.
+        dimension: {type: categorical}
+      - name: customer_segment
+        description: Customer tier (Standard, Premium, VIP).
+        dimension:
+          type: categorical
+          config: {meta: {synonyms: [customer tier, segment]}}
 
   - name: dim_products
     description: One row per product, with its category name folded in.
+    semantic_model: true
     columns:
       - name: product_id
         data_tests: [unique, not_null]
+        entity: {type: primary, name: product}
+      - name: product_name
+        description: Product name.
+        dimension: {type: categorical}
       - name: category_name
+        description: Product category (10 categories).
         data_tests: [not_null]
+        dimension:
+          type: categorical
+          config: {meta: {synonyms: [product category, department]}}
 
   - name: fct_order_lines
     description: One row per order line. Amounts are DECIMAL(18, 2); only discount_amount is rounded.
+    semantic_model:
+      enabled: true
+      name: sales
+    agg_time_dimension: order_date
     columns:
       - name: order_line_id
         description: order_id || '-' || product_id.
         data_tests: [unique, not_null]
+        entity: {type: primary, name: order_line}
       - name: order_id
         data_tests: [not_null]
       - name: customer_key
@@ -33,6 +68,7 @@ models:
               arguments:
                 to: ref('dim_customers')
                 field: customer_key
+        entity: {type: foreign, name: customer}
       - name: product_id
         data_tests:
           - not_null
@@ -40,27 +76,38 @@ models:
               arguments:
                 to: ref('dim_products')
                 field: product_id
+        entity: {type: foreign, name: product}
       - name: order_date
+        description: Date the order was placed.
         data_tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('time_spine_daily')
                 field: date_day
+        granularity: day
+        dimension: {type: time}
       - name: gross_amount
         description: quantity * unit_price.
       - name: discount_amount
         description: round(quantity * unit_price * discount_rate, 2), half away from zero. The only rounded amount.
       - name: net_amount
-        description: gross_amount - discount_amount.
+        description: gross_amount - discount_amount. After discounts, before returns.
       - name: cost_amount
         description: quantity * unit_cost.
       - name: margin_amount
-        description: net_amount - cost_amount. Can be negative.
+        description: net_amount - cost_amount. Before returns. Can be negative.
+      - name: is_returned
+        description: True if the line was returned. Returns are always whole lines.
+        dimension: {type: categorical}
       - name: returned_net_amount
         description: net_amount when the line was returned, else 0.
+      - name: returned_quantity
+        description: quantity when the line was returned, else 0.
       - name: return_reason
-        description: NULL unless is_returned.
+        description: >
+          The specific reason given for a return (29 values). NULL unless is_returned.
+          Each reason rolls up to exactly one return_category.
         data_tests:
           - accepted_values:
               arguments:
@@ -94,14 +141,116 @@ models:
                   - Wrong Flavor Sent
                   - Wrong Item Sent
                   - Wrong Product Sent
+        dimension:
+          type: categorical
+          config: {meta: {synonyms: [specific return reason, detailed return reason]}}
       - name: return_category
         description: >
-          Return reason grouped by cause: Fulfillment Error, Physical Damage, Spoilage,
-          Product Quality, Adverse Reaction, Customer Preference. NULL unless is_returned.
-          Spoilage is about half Expired Date.
+          Return reason grouped into six causes: Fulfillment Error, Physical Damage,
+          Spoilage, Product Quality, Adverse Reaction, Customer Preference. NULL unless
+          is_returned. Use for summaries; return_reason has the detail. Spoilage is about
+          half Expired Date.
+        dimension:
+          type: categorical
+          config: {meta: {synonyms: [return category, return type, return group]}}
+
+    metrics:
+      - name: gross_revenue
+        description: Revenue at list price (quantity * unit price), before discounts and returns.
+        type: simple
+        agg: sum
+        expr: gross_amount
+        config: {meta: {synonyms: [list price revenue, revenue before discounts]}}
+      - name: discounts
+        description: Total discount given.
+        type: simple
+        agg: sum
+        expr: discount_amount
+        config: {meta: {synonyms: [discount amount, markdowns]}}
+      - name: net_revenue
+        description: Revenue after discounts, before returns. What customers paid.
+        type: simple
+        agg: sum
+        expr: net_amount
+        config: {meta: {synonyms: [sales, net sales, revenue]}}
+      - name: cost_of_goods
+        description: Cost of the units sold, before returns.
+        type: simple
+        agg: sum
+        expr: cost_amount
+        config: {meta: {synonyms: [COGS, cost]}}
+      - name: gross_margin
+        description: Net revenue minus cost of goods, before returns. Can be negative on a line.
+        type: simple
+        agg: sum
+        expr: margin_amount
+        config: {meta: {synonyms: [margin, gross profit]}}
+      - name: returned_revenue
+        description: Net revenue of returned lines (what customers had paid for them).
+        type: simple
+        agg: sum
+        expr: returned_net_amount
+        config: {meta: {synonyms: [refunds, returned sales]}}
+      - name: units_sold
+        description: Units sold, before returns.
+        type: simple
+        agg: sum
+        expr: quantity
+        config: {meta: {synonyms: [quantity sold, items sold]}}
+      - name: units_returned
+        description: Units returned.
+        type: simple
+        agg: sum
+        expr: returned_quantity
+        config: {meta: {synonyms: [quantity returned, items returned]}}
+      - name: order_line_count
+        description: Number of order lines (one product on one order).
+        type: simple
+        agg: count
+        expr: order_line_id
+        config: {meta: {synonyms: [line items]}}
+      - name: order_count
+        description: Number of distinct orders.
+        type: simple
+        agg: count_distinct
+        expr: order_id
+        config: {meta: {synonyms: [orders, number of orders]}}
+      - name: customer_count
+        description: Number of distinct customers (counted by pseudonymous key).
+        type: simple
+        agg: count_distinct
+        expr: customer_key
+        config: {meta: {synonyms: [customers, unique customers, number of customers]}}
+      - name: average_order_value
+        description: Net revenue per order.
+        type: ratio
+        numerator: net_revenue
+        denominator: order_count
+        config: {meta: {synonyms: [AOV, average basket value]}}
+      - name: gross_margin_rate
+        description: Gross margin as a share of net revenue.
+        type: ratio
+        numerator: gross_margin
+        denominator: net_revenue
+        config: {meta: {synonyms: [margin percent, margin rate]}}
+      - name: unit_return_rate
+        description: Units returned as a share of units sold. The default return rate.
+        type: ratio
+        numerator: units_returned
+        denominator: units_sold
+        config: {meta: {synonyms: [return rate, item return rate]}}
+      - name: revenue_return_rate
+        description: Returned revenue as a share of net revenue.
+        type: ratio
+        numerator: returned_revenue
+        denominator: net_revenue
+        config: {meta: {synonyms: [value return rate, returned share of revenue]}}
 
   - name: time_spine_daily
     description: One row per calendar day, 2020-01-01 to 2026-12-31. MetricFlow time spine and date dimension.
+    time_spine:
+      standard_granularity_column: date_day
     columns:
       - name: date_day
+        granularity: day
         data_tests: [unique, not_null]

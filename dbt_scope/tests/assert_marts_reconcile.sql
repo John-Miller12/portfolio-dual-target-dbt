@@ -1,7 +1,8 @@
 -- Design 02, B6: the marts reconcile to raw. Returns one row per failed
 -- check, with what was expected and what the marts hold.
 --   * Row counts: no lines, customers or products lost or duplicated.
---   * Sums: quantity, gross and cost match the same sums on raw.
+--   * Sums: quantity, returned quantity, gross and cost match the same
+--     sums on raw.
 --   * Identities: gross = discount + net and net = cost + margin on every
 --     line, so the single rounding step (E4) can't leak into other amounts.
 -- Values are compared as DECIMAL(38, 2) so the union has one type everywhere.
@@ -12,7 +13,9 @@ with raw_lines as (
         count(*)                     as row_count,
         sum(quantity)                as quantity,
         sum(quantity * unit_price)   as gross_amount,
-        sum(quantity * unit_cost)    as cost_amount
+        sum(quantity * unit_cost)    as cost_amount,
+        sum(case when is_returned = 1 then quantity else 0 end)
+                                     as returned_quantity
     from {{ source('retail', 'order_details') }}
 
 ),
@@ -24,6 +27,7 @@ fact as (
         sum(quantity)                as quantity,
         sum(gross_amount)            as gross_amount,
         sum(cost_amount)             as cost_amount,
+        sum(returned_quantity)       as returned_quantity,
         sum(case when gross_amount != discount_amount + net_amount then 1 else 0 end)
                                      as gross_identity_breaks,
         sum(case when net_amount != cost_amount + margin_amount then 1 else 0 end)
@@ -47,6 +51,10 @@ checks as (
 
     union all
     select 'sum(cost_amount)', raw_lines.cost_amount::DECIMAL(38, 2), fact.cost_amount::DECIMAL(38, 2)
+    from raw_lines cross join fact
+
+    union all
+    select 'sum(returned_quantity)', raw_lines.returned_quantity::DECIMAL(38, 2), fact.returned_quantity::DECIMAL(38, 2)
     from raw_lines cross join fact
 
     union all
