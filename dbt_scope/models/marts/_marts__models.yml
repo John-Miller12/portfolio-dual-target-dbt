@@ -52,7 +52,6 @@ models:
     description: One row per order line. Amounts are DECIMAL(18, 2); only discount_amount is rounded.
     semantic_model:
       enabled: true
-      name: sales
       config:
         meta:
           description: >

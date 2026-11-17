@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 8. H1–H13 are decided** (approved 2026-11-17). D9 turns 1–2 are built. Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 recorded approval: H13 stays "before returns" for v1, and H11 is approved as proposed. Revision 7 recorded turn 1 as built and added the column check it showed is needed (S3, turn 2). Revision 8 records turn 2 as built.
+Status: **revision 9. H1–H13 are decided** (approved 2026-11-17). D9 turns 1–2 are built. Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 recorded approval: H13 stays "before returns" for v1, and H11 is approved as proposed. Revision 7 recorded turn 1 as built and added the column check it showed is needed (S3, turn 2). Revision 8 recorded turn 2 as built. Revision 9 drops the semantic model's `name: sales` override. The semantic model is now `fct_order_lines`, and `sales` names only the model that builds `semantic.sales`.
 
 Phases in this doc:
 
@@ -136,7 +136,7 @@ flowchart LR
     ts["time_spine_daily<br/>time_spine"]
   end
   def -->|dbt parse| g[("graph")]
-  g --> rs{{"semgen macros<br/>render_semantic('sales')"}}
+  g --> rs{{"semgen macros<br/>render_semantic('fct_order_lines')"}}
   rs -->|snowflake__| sv["semantic.sales<br/>SEMANTIC VIEW"]
   rs -->|databricks__| mv["semantic.sales<br/>METRIC VIEW"]
   sv & mv -->|grant_reader| rd["reader role · MCP"]
@@ -156,7 +156,7 @@ dbt_scope/
   models/
     marts/_marts__models.yml # + the semantic definition (F1)
     semantic/
-      sales.sql              # one line: {{ render_semantic('sales') }}
+      sales.sql              # refs the star + {{ render_semantic('fct_order_lines') }}
 ```
 
 - **Folder names:** the macro folder is `semgen/`, not `semantic/`, so no name lives in both `macros/` and `models/`. This follows the spirit of 02A G9.
@@ -175,7 +175,7 @@ The semantic definition goes into the existing entries in `_marts__models.yml`. 
 
 ```yaml
   - name: fct_order_lines
-    semantic_model: {enabled: true, name: sales}
+    semantic_model: {enabled: true}   # takes the model's name, fct_order_lines
     agg_time_dimension: order_date
     columns:
       - name: order_line_id
@@ -389,7 +389,7 @@ Two additions from this design:
 
 ### D9. Proposed turns
 
-1. ✅ **Definition on DuckDB (done).** `returned_quantity` is on `fct_order_lines` (H11) and reconciles to raw (3,817 units, a 4.70% unit return rate). `_marts__models.yml` holds the definition: three semantic models (`sales`, `dim_customers`, `dim_products`), 15 metrics, and the time spine. 66 checks pass. A misspelled metric reference fails `dbt parse`; a misspelled column in `expr` doesn't, which turn 2 covers.
+1. ✅ **Definition on DuckDB (done).** `returned_quantity` is on `fct_order_lines` (H11) and reconciles to raw (3,817 units, a 4.70% unit return rate). `_marts__models.yml` holds the definition: three semantic models (`fct_order_lines`, `dim_customers`, `dim_products`), 15 metrics, and the time spine. 66 checks pass. A misspelled metric reference fails `dbt parse`; a misspelled column in `expr` doesn't, which turn 2 covers.
 2. ✅ **Renderer (done).** `macros/semgen/semantic_catalog.sql` builds the name map and enforces S1–S3. `render_semantic.sql` writes the platform body, and `models/semantic/sales.sql` calls it. As built:
    - **Compiles without accounts.** `dbt compile --target snowflake|databricks --no-populate-cache` works with placeholder environment variables, so the output can be reviewed before turn 3. The `snowflake` and `databricks` targets are in `profiles.yml` and read everything from environment variables.
    - **`pseudonymize` for Snowflake and Databricks was pulled forward.** Its default version raises an error at parse time, so neither target would compile without it. It calls `<database>.governance.pseudonymize(col)` as 02A §3 specifies. The function itself is created by `bootstrap()` in turn 3.
@@ -398,7 +398,7 @@ Two additions from this design:
      - `description`, a business description used as the view comment. The fact's technical description is the fallback.
      - `ai_instructions`, H12's routing rule, rendered as Snowflake's `AI_SQL_GENERATION`.
    - **Databricks YAML strings are double-quoted by a small helper.** dbt-databricks quotes the table names. *Checked:* the compiled YAML parses, with 14 dimensions, 15 measures and 2 joins.
-   - **The model and the semantic model are both named `sales`,** so `dbt -s sales` selects both. Select the model by path, `-s models/semantic/sales.sql`.
+   - **Names:** the semantic model takes its model's name (`fct_order_lines`), and `sales` names only the model that builds `semantic.sales`. Revision 8 had both named `sales`, which made `dbt -s sales` select both. Dropping the override left the compiled output unchanged on both platforms (*checked*: identical files).
    - **Moved to turn 3:** the `dbt_semantic_view` package, `copy_grants`, and the `grant_reader()` post-hook. They only matter once there's an account to run against.
 3. **Snowflake.** Sign up (H10), `provision_platform_admin`, `bootstrap`, load, then build the marts and `semantic.sales`. Query it as `READER`.
 4. **Databricks.** Settle 02A V2, bootstrap, load, then build the marts and `semantic.sales`. Query it as the reader.
