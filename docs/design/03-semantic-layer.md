@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 6. H1–H13 are decided** (approved 2026-11-17), and phase 3 is under way (D9). Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 records approval: H13 stays "before returns" for v1, and H11 is approved as proposed.
+Status: **revision 7. H1–H13 are decided** (approved 2026-11-17). D9 turn 1 is built. Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 recorded approval: H13 stays "before returns" for v1, and H11 is approved as proposed. Revision 7 records turn 1 as built and adds the column check it showed is needed (S3, turn 2).
 
 Phases in this doc:
 
@@ -96,7 +96,7 @@ Each of these is a problem the first-pass flow hits. Revision 2 turns them into 
 |---|---|---|
 | S1 | P1 | **Every dimension and metric name is unique and snake_case across the whole definition**, so a bare name means the same thing everywhere. Snowflake's logical-table alias is the entity name. One name then maps mechanically: MetricFlow `customer__region` → Snowflake `customer.region` → Databricks `region`. The renderer fails the build on a duplicate. |
 | S2 | P2, F6 | **Time grains are generated as named dimensions**, identical on both platforms: `order_date`, `order_week`, `order_month`, `order_quarter`, `order_year`. Each is `DATE_TRUNC(...)::DATE`. Weeks start on Monday on all three engines (design 02, A4 note), and week-number functions are never used. |
-| S3 | P3 | **Metric types are limited to v1's set:**<br>• Simple metrics (`sum`, `count`, `count_distinct`) whose `expr` is **one fact column**. Any logic becomes a mart column, as design 02 R3 already requires.<br>• Ratios of two simple metrics, rendered as `a / NULLIF(b, 0)`.<br>• No `average`, no filtered metrics, no cumulative metrics. The renderer fails on anything else.<br>Parity compares sums and counts exactly and ratios within a tolerance. |
+| S3 | P3 | **Metric types are limited to v1's set:**<br>• Simple metrics (`sum`, `count`, `count_distinct`) whose `expr` is **one fact column**. Any logic becomes a mart column, as design 02 R3 already requires.<br>• Ratios of two simple metrics, rendered as `a / NULLIF(b, 0)`.<br>• **Every `expr` and dimension must be a column documented on its model.** dbt doesn't check this: *tested in turn 1*, a misspelled column in `expr` parses cleanly, while a misspelled metric reference fails. The renderer checks it.<br>• No `average`, no filtered metrics, no cumulative metrics. The renderer fails on anything else.<br>Parity compares sums and counts exactly and ratios within a tolerance. |
 | S4 | P6, P7 | **Golden questions are dbt saved queries** (*tested*: they parse and appear in `graph.saved_queries`). dbt validates their metric names at parse time, and the renderer can read them. Filters are limited to a range on the order date and equality or `IN` on a dimension. |
 | S5 | P4, P5, P9 | **Parity needs an answer set computed independently of both warehouses.** A dispatched `semantic_query()` macro renders a golden question as plain SQL on the marts (default), as `SEMANTIC_VIEW(...)` (Snowflake), or as `MEASURE() ... GROUP BY` (Databricks). Design 04 decides the rest. The renderer only has to make that macro possible, which S1–S4 do. |
 | S6 | P8 | Reader grants survive rebuilds: `copy_grants=true` on Snowflake, plus the `grant_reader()` post-hook (02A) on both platforms. |
@@ -198,7 +198,7 @@ The semantic definition goes into the existing entries in `_marts__models.yml`. 
         type: simple
         agg: sum
         expr: net_amount
-        description: Revenue after discounts, in dollars.
+        description: Revenue after discounts, before returns. What customers paid.
         config: {meta: {synonyms: [sales, net sales, revenue]}}
       - name: order_count
         type: simple
@@ -309,7 +309,7 @@ DIMENSIONS (
 )
 METRICS (
   order_line.net_revenue AS SUM(order_line.net_amount)
-    WITH SYNONYMS = ('sales', 'net sales', 'revenue') COMMENT = 'Revenue after discounts, in dollars.',
+    WITH SYNONYMS = ('sales', 'net sales', 'revenue') COMMENT = 'Revenue after discounts, before returns. What customers paid.',
   order_line.order_count AS COUNT(DISTINCT order_line.order_id),
   order_line.average_order_value AS order_line.net_revenue / NULLIF(order_line.order_count, 0)
 )
@@ -339,7 +339,7 @@ measures:
   - name: net_revenue
     expr: SUM(net_amount)
     synonyms: [sales, net sales, revenue]
-    comment: Revenue after discounts, in dollars.
+    comment: Revenue after discounts, before returns. What customers paid.
   - name: order_count
     expr: COUNT(DISTINCT order_id)
   - name: average_order_value
@@ -389,8 +389,8 @@ Two additions from this design:
 
 ### D9. Proposed turns
 
-1. **Definition on DuckDB.** Add `returned_quantity` to `fct_order_lines` (H11), with a reconciliation check that it matches the returned lines. Add the semantic definition and time spine to `_marts__models.yml` and run `dbt parse`. No accounts are needed.
-2. **Renderer on DuckDB.** `semantic_catalog` with the S1–S3 checks, and `render_semantic` for both platforms, verified with `dbt compile --target` against stub profiles. Negative tests: a duplicate name and an `average` metric must fail.
+1. ✅ **Definition on DuckDB (done).** `returned_quantity` is on `fct_order_lines` (H11) and reconciles to raw (3,817 units, a 4.70% unit return rate). `_marts__models.yml` holds the definition: three semantic models (`sales`, `dim_customers`, `dim_products`), 15 metrics, and the time spine. 66 checks pass. A misspelled metric reference fails `dbt parse`; a misspelled column in `expr` doesn't, which turn 2 covers.
+2. **Renderer on DuckDB.** `semantic_catalog` with the S1–S3 checks (including the column check), and `render_semantic` for both platforms, verified with `dbt compile --target` against stub profiles. Negative tests: a duplicate name and an `average` metric must fail.
 3. **Snowflake.** Sign up (H10), `provision_platform_admin`, `bootstrap`, load, then build the marts and `semantic.sales`. Query it as `READER`.
 4. **Databricks.** Settle 02A V2, bootstrap, load, then build the marts and `semantic.sales`. Query it as the reader.
 5. **Close out phase 3.** Update this doc as built, then design 04 (parity and CI).
