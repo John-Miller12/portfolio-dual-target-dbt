@@ -1,6 +1,6 @@
 # Design 02A: Governance, RBAC and customer ID masking
 
-Status: **revision 4**. G1–G9 are decided. Revision 4 adds G9, where the name `governance` may live in the dbt project. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
+Status: **revision 5**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 adds G10: `city` is dropped in staging. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
 
 This is a child of design 02. It covers who can see what on each platform, how customer IDs are hidden, and the one-time admin setup.
 
@@ -13,7 +13,7 @@ This is a child of design 02. It covers who can see what on each platform, how c
 - A reader reaching raw IDs through a view, a join, or a dimension exposed by mistake.
 - Recovering raw IDs from hashed values. **This one matters here:** the IDs are `CSTMR0001` to `CSTMR1000`, so an unsalted hash can be reversed by hashing all 1,000 candidates. **The protection rests entirely on the salt staying secret.**
 
-**Not in scope:** the data is synthetic, and gender, city, region and segment are low-risk attributes. Exact age is dropped in staging, and only the band goes downstream (G7).
+**Not in scope:** the data is synthetic, and gender, region and segment are low-risk attributes. Exact age (G7) and city (G10) are dropped in staging. Only the age band and region go downstream.
 
 **Design principle:** no control depends on a paid feature tier or on a feature that may not exist on Databricks Free Edition (V1).
 
@@ -221,6 +221,7 @@ sequenceDiagram
 | G7 | Exact age | **Dropped in staging.** Only `age_band` goes downstream. |
 | **G8** | **Dynamic masking on raw** | **Dropped on both platforms.** Raw is protected by grants, and the phase 4 access check enforces that. This supersedes G5. |
 | **G9** | **Where the name `governance` lives in the dbt project** | **Either `macros/governance/` or `models/governance/`, never both.** It's the macros folder today. If governance-owned models are ever needed, the governance folder moves or is renamed so the name still points to one place in the project. The warehouse schema `governance`, which holds the pseudonymize function, deliberately shares the name with whichever folder it is. |
+| **G10** | **City** | **Dropped in staging.** It's too precise, and next to gender, age band and segment it can narrow a group to a handful of people (the smallest of the 10 cities has 9 customers). `region` (5 values) is the only location attribute downstream. |
 
 ## 10. To verify when the accounts exist
 
