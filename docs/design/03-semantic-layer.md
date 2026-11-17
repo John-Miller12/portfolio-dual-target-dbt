@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 4, proposed.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 proposal, with decisions H1–H10 open for review. Revision 3 follows design 02 revision 9: `return_reason` and `return_category` are both dimensions, and there's no return-category sort column. Revision 4 follows design 02 revision 10: no age-band sort column either.
+Status: **revision 5, proposed.** Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 proposal, with decisions H1–H10 open for review. Revision 3 follows design 02 revision 9: `return_reason` and `return_category` are both dimensions, and there's no return-category sort column. Revision 4 follows design 02 revision 10: no age-band sort column either. Revision 5 removes `city` (02A G10), justifies the ratio denominators, adds a unit-based return rate, and sets rules for dimensions that overlap (D4, H11–H13).
 
 Phases in this doc:
 
@@ -188,9 +188,11 @@ The semantic definition goes into the existing entries in `_marts__models.yml`. 
         granularity: day
         dimension: {type: time}
       - name: return_category
-        dimension: {type: categorical, config: {meta: {synonyms: [return type, why returned]}}}
+        description: Return reason grouped into six causes. Use for summaries; return_reason has the detail.
+        dimension: {type: categorical, config: {meta: {synonyms: [return category, return type, return group]}}}
       - name: return_reason
-        dimension: {type: categorical}
+        description: The specific reason given (29 values). Each one rolls up to exactly one return_category.
+        dimension: {type: categorical, config: {meta: {synonyms: [specific return reason, detailed return reason]}}}
     metrics:
       - name: net_revenue
         type: simple
@@ -239,25 +241,51 @@ The semantic definition goes into the existing entries in `_marts__models.yml`. 
 
 | Metric | Type | Definition |
 |---|---|---|
-| `gross_revenue` | sum | `gross_amount` |
+| `gross_revenue` | sum | `gross_amount` (list price × quantity) |
 | `discounts` | sum | `discount_amount` |
-| `net_revenue` | sum | `net_amount` |
+| `net_revenue` | sum | `net_amount`: after discounts, **before returns** |
 | `cost_of_goods` | sum | `cost_amount` |
-| `gross_margin` | sum | `margin_amount` |
+| `gross_margin` | sum | `margin_amount` = net − cost, before returns |
 | `returned_revenue` | sum | `returned_net_amount` |
 | `units_sold` | sum | `quantity` |
+| `units_returned` | sum | `returned_quantity`, **a new mart column** (quantity if returned, else 0), added in turn 1 |
 | `order_line_count` | count | `order_line_id` |
 | `order_count` | count_distinct | `order_id` |
 | `customer_count` | count_distinct | `customer_key` |
 | `average_order_value` | ratio | `net_revenue / order_count` |
 | `gross_margin_rate` | ratio | `gross_margin / net_revenue` |
-| `return_rate` | ratio | `returned_revenue / net_revenue` (by value, not by line count) |
+| `unit_return_rate` | ratio | `units_returned / units_sold`, **count-based** (H11). Carries the synonym "return rate". |
+| `revenue_return_rate` | ratio | `returned_revenue / net_revenue`, **value-based** (renamed from `return_rate`) |
 
 | Entity | Dimensions |
 |---|---|
 | `order_line` | `order_date`, `order_week`, `order_month`, `order_quarter`, `order_year` (generated, S2); `is_returned`; `return_reason`; `return_category` |
-| `customer` | `gender`, `age_band`, `region`, `city`, `customer_segment` |
+| `customer` | `gender`, `age_band`, `region`, `customer_segment` (`city` dropped, 02A G10) |
 | `product` | `product_name`, `category_name` |
+
+**Why the ratios divide by `net_revenue`.** A ratio's numerator and denominator have to be on the same basis, and here both numerators are amounts after discounts:
+- **`gross_margin_rate`.** `gross_margin` is net − cost: margin on what customers actually paid. The standard gross margin % is (net sales − cost of goods) / net sales. Dividing by `gross_revenue` would put a post-discount numerator over a pre-discount base. The discount would then reduce the margin but not the base, understating the rate: 26.7% instead of **27.8%** on this data.
+- **`revenue_return_rate`.** `returned_net_amount` is what was paid for the returned lines, after their discount. So the matching base is everything paid, `net_revenue`, giving **4.39%**. Over `gross_revenue` the rate would come out lower than the share of paid value that came back.
+
+**The real caveat is returns, not discounts.** "Net" here means after discounts only. Returned lines still count in `net_revenue` ($33,477.90) and in `gross_margin` ($9,424.06). In standard retail reporting, net sales are also after returns. The names and descriptions must say "before returns" (done above), and H13 decides whether v1 also needs after-returns figures.
+
+**Count-based return rate (H11).** Three count bases give very different numbers on this data:
+
+| Basis | Definition | Value |
+|---|---|---|
+| **Units (recommended)** | units returned / units sold | 4.70% |
+| Lines | returned lines / lines | 4.70% |
+| Orders | orders with any returned line / orders | **13.3%** |
+
+**Units** is the usual retail definition ("items returned / items sold"). Lines would give the same figure here, because every return covers a whole line. The orders basis answers a different question: how often an order has a problem. It could be added later under its own name, but it needs an order-level flag in the marts.
+
+**Dimensions that overlap: `return_reason` and `return_category` (H12).** Keeping both is correct: they answer different questions at two levels of the same hierarchy. The risk is that the wording of a question picks the wrong level. "Why do customers return things?" fits both. The mitigations:
+1. **Synonyms never overlap.** Revision 2 put "why returned" on `return_category`, which described `return_reason` just as well. It's removed. Each level's synonyms name its own level only (D3).
+2. **Descriptions state the hierarchy.** Each says which column it rolls up to or from, and which to use for summaries.
+3. **One routing rule for the AI layer:** "For questions about why items are returned, group by `return_category` unless the user asks for specific reasons." It goes in Snowflake's `AI_SQL_GENERATION` clause and in the Genie space instructions (phase 5).
+4. **Golden questions cover both phrasings**, so the phase 5 evaluation measures whether the routing works.
+
+None of this affects parity. Parity runs fixed queries, not natural language. The same rules apply to the two return rates: only `unit_return_rate` carries the synonym "return rate".
 
 **No sort columns.** `age_band` labels sort correctly as text, and return categories have no natural order. `return_reason` and `return_category` are both dimensions, so a question can be answered at either level.
 
@@ -348,17 +376,20 @@ Two additions from this design:
 | H1 | Where the definition lives | **In `_marts__models.yml`, latest spec.** Forced by F1. |
 | H2 | Generator | **Option B, dbt-native macros in `macros/semgen/`** (D6). |
 | H3 | Semantic objects | **One star, `semantic.sales`.** More objects only when there's a second fact. |
-| H4 | Metric types and catalog | **S3 subset, 13 metrics** (D4). |
+| H4 | Metric types and catalog | **S3 subset, 15 metrics** (D4). |
 | H5 | Naming | **Flat, unique, snake_case. Snowflake aliases are entity names. No sort columns** (S1, D4). |
 | H6 | Time grains | **Day, week, month, quarter, year, generated as `DATE_TRUNC(...)::DATE`** (S2). |
 | H7 | Snowflake materialization | **The `Snowflake-Labs/dbt_semantic_view` package, pinned to 1.0.6.** This revises design 02 E5 ("no packages"), and `dbt deps` joins the build. The alternative is a 10-line in-house materialization. It's smaller, but it ignores an official package that reviewers will recognize. |
 | H8 | Reader grants | **`grant_reader()` post-hook on both platforms, plus `copy_grants` on Snowflake.** Databricks' native `grants:` config would work too, but one mechanism on both is easier to explain. |
 | H9 | Golden questions | **dbt saved queries** (S4). The answer seed and the parity tests are design 04. |
 | H10 | Snowflake trial region | **A region with Cortex Analyst and the managed MCP server.** Verify at signup. |
+| H11 | Count-based return rate | **`unit_return_rate` = units returned / units sold**, with a new mart column `returned_quantity`. The alternatives are lines (the same figure here) and orders with a return (13.3%, a different question). |
+| H12 | `return_reason` and `return_category` | **Keep both, without renaming either.** Synonyms don't overlap, descriptions state the hierarchy, there's one routing rule for the AI layer, and the golden questions test both phrasings (D4). |
+| H13 | Returns in net revenue and margin | **v1: before returns, stated in the names' descriptions.** After-returns figures are a business definition the data can't settle. Netting revenue is easy (net − returned), but margin depends on whether returned goods are written off or restocked. Decide before phase 5 if the demo needs them. |
 
 ### D9. Proposed turns
 
-1. **Definition on DuckDB.** Add the semantic definition and time spine to `_marts__models.yml` and run `dbt parse`. No accounts are needed.
+1. **Definition on DuckDB.** Add `returned_quantity` to `fct_order_lines` (H11), with a reconciliation check that it matches the returned lines. Add the semantic definition and time spine to `_marts__models.yml` and run `dbt parse`. No accounts are needed.
 2. **Renderer on DuckDB.** `semantic_catalog` with the S1–S3 checks, and `render_semantic` for both platforms, verified with `dbt compile --target` against stub profiles. Negative tests: a duplicate name and an `average` metric must fail.
 3. **Snowflake.** Sign up (H10), `provision_platform_admin`, `bootstrap`, load, then build the marts and `semantic.sales`. Query it as `READER`.
 4. **Databricks.** Settle 02A V2, bootstrap, load, then build the marts and `semantic.sales`. Query it as the reader.
