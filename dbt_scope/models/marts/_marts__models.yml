@@ -53,6 +53,17 @@ models:
     semantic_model:
       enabled: true
       name: sales
+      config:
+        meta:
+          description: >
+            Retail sales at order-line grain: what was sold, to which customer segment,
+            at what price, discount, cost and margin, and what came back and why.
+          # Rendered as Snowflake's AI_SQL_GENERATION; Genie instructions in phase 5 (design 03, H12).
+          ai_instructions: >
+            For questions about why items are returned, group by return_category unless
+            the user asks for specific reasons, then use return_reason. "Return rate" means
+            unit_return_rate unless the user asks about value or revenue. Net revenue and
+            gross margin are after discounts and before returns.
     agg_time_dimension: order_date
     columns:
       - name: order_line_id
@@ -87,6 +98,8 @@ models:
                 field: date_day
         granularity: day
         dimension: {type: time}
+      - name: quantity
+        description: Units on the line.
       - name: gross_amount
         description: quantity * unit_price.
       - name: discount_amount

@@ -1,7 +1,10 @@
-# Targets (design 02, B7; 02A section 5). Only duckdb exists in phase 2.
-# Phase 3 adds: snowflake (TRANSFORMER), snowflake_admin (PLATFORM_ADMIN),
-# snowflake_provision (ACCOUNTADMIN, one-time), and Databricks equivalents.
-# Credentials always come from env_var(), never from this file.
+# Targets (design 02, B7; 02A section 5).
+# Credentials always come from env_var(), never from this file. Secrets use
+# the DBT_ENV_SECRET_ prefix so dbt scrubs them from logs.
+# Still to come in phase 3: snowflake_admin (PLATFORM_ADMIN),
+# snowflake_provision (ACCOUNTADMIN, one-time) and databricks_admin.
+# Object-name defaults below are placeholders until accounts are set up
+# (design 03, D9 turns 3-4).
 
 retail:
   target: duckdb
@@ -11,4 +14,24 @@ retail:
       # Relative to the repo root, where load/pipeline.py writes the raw tables.
       path: "{{ env_var('DBT_DUCKDB_PATH', '.local/dev.duckdb') }}"
       schema: main   # fallback only; every node sets a custom schema
+      threads: 4
+
+    snowflake:       # role TRANSFORMER, key-pair auth (02A section 6)
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      role: TRANSFORMER
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'RETAIL_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'RETAIL') }}"
+      schema: main   # fallback only
+      threads: 4
+
+    databricks:      # transformers principal (02A section 6)
+      type: databricks
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DBT_ENV_SECRET_DATABRICKS_TOKEN') }}"
+      catalog: "{{ env_var('DATABRICKS_CATALOG', 'workspace') }}"
+      schema: main   # fallback only
       threads: 4

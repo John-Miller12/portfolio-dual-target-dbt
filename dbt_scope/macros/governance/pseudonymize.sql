@@ -4,10 +4,10 @@
 
     DuckDB: salt from the PII_SALT env var, with a fixed dev fallback. Local,
     synthetic data only.
-    Snowflake / Databricks: phase 3. They will call governance.pseudonymize(),
-    a warehouse function holding the salt, so the salt never appears in
-    compiled SQL (02A section 4). Until then the default raises, so an
-    unimplemented target can never silently pass raw IDs through.
+    Snowflake / Databricks: call governance.pseudonymize(), a warehouse
+    function created by bootstrap() that holds the salt, so the salt never
+    appears in compiled SQL (02A section 4). Any other target raises, so it
+    can never silently pass raw IDs through.
 #}
 {% macro pseudonymize(column) %}
     {{ return(adapter.dispatch('pseudonymize', 'retail')(column)) }}
@@ -22,4 +22,12 @@
 {% macro duckdb__pseudonymize(column) %}
     {%- set salt = env_var('PII_SALT', 'dev-only-salt-not-secret') | replace("'", "''") -%}
     sha256('{{ salt }}' || ':' || {{ column }})
+{%- endmacro %}
+
+{% macro snowflake__pseudonymize(column) %}
+    {{ target.database }}.governance.pseudonymize({{ column }})
+{%- endmacro %}
+
+{% macro databricks__pseudonymize(column) %}
+    {{ target.database }}.governance.pseudonymize({{ column }})
 {%- endmacro %}
