@@ -1,6 +1,6 @@
 # Design 02A: Governance, RBAC and customer ID masking
 
-Status: **revision 5**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 adds G10: `city` is dropped in staging. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
+Status: **revision 6**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 added G10: `city` is dropped in staging. Revision 6 records the Snowflake account (2026-11-21), adds the cross-region inference setting to provisioning, and sets how people and dbt sign in (section 5). V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
 
 This is a child of design 02. It covers who can see what on each platform, how customer IDs are hidden, and the one-time admin setup.
 
@@ -112,6 +112,11 @@ flowchart TD
 | `CREATE ROLE PLATFORM_ADMIN`, granted to `SYSADMIN` (the standard hierarchy) and to your user | A starting point for the role tree |
 | Grant `PLATFORM_ADMIN` these account privileges: `CREATE DATABASE`, `CREATE ROLE`, `CREATE USER` | Only an account-level role can grant account-level privileges |
 | Create the warehouse (X-Small, `AUTO_SUSPEND = 60`) and a **resource monitor** that caps monthly credits, then hand the warehouse's ownership to `PLATFORM_ADMIN` | Only `ACCOUNTADMIN` can create resource monitors and attach them to a warehouse. Doing it here means `PLATFORM_ADMIN` never needs `CREATE WAREHOUSE`. |
+| `ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'AWS_US'` | The account is in AWS `ca-central-1`, where Cortex Analyst isn't hosted natively ([docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst)). Cross-region inference lets it run there. Data stays stored in Canada; only each request's payload is processed in a US region, briefly. Account parameters are `ACCOUNTADMIN`-only, and `PLATFORM_ADMIN` deliberately can't set them. |
+
+**The macro prints before it runs.** `provision_platform_admin` takes `dry_run` (default `true`), which only logs the statements. Every statement is idempotent (`IF NOT EXISTS`, or a re-applied grant or setting), so a rerun is safe.
+
+**The resource monitor caps warehouse compute only.** Cortex Analyst and other serverless features bill separately and aren't stopped by it. They're watched through the trial's credit balance.
 
 **What `PLATFORM_ADMIN` deliberately does not get:** `MANAGE GRANTS` (which would allow granting anything on any object), integrations, shares, account parameters, billing and usage views, network policies, or any `APPLY ... POLICY` privilege. It can grant privileges on objects it **owns**, which is everything `bootstrap()` creates, and that's all it needs.
 
@@ -122,6 +127,12 @@ flowchart TD
 - **Users:** `SVC_PIPELINE` and `SVC_MCP`, created as `TYPE = SERVICE` with RSA public keys.
 - **The pseudonymize function:** `governance.pseudonymize()` as a secure UDF, with `USAGE` granted to `TRANSFORMER`.
 - **Grants and future grants:** as in section 6.
+
+**How people and dbt sign in (Snowflake):**
+- **You, in Snowsight:** password plus MFA, enrolled in Snowsight. This is also the fallback when key-pair sign-in isn't available.
+- **You, through dbt** (`snowflake_provision` as `ACCOUNTADMIN`, `snowflake_admin` as `PLATFORM_ADMIN`): a key pair on your own user, with the private key encrypted by a passphrase. The key's path and passphrase come from environment variables; the passphrase uses the `DBT_ENV_SECRET_` prefix so dbt keeps it out of logs. Key-pair sign-in doesn't use MFA, by design.
+- **dbt's browser sign-in** (`authenticator: externalbrowser`) is single sign-on through an identity provider (SAML). This account has no identity provider, so it isn't used.
+- **Service users** (`SVC_PIPELINE`, `SVC_MCP`): key pairs only. `TYPE = SERVICE` can't use a password.
 
 **After provisioning,** your day-to-day role in Snowsight is `PLATFORM_ADMIN`. You only switch to `ACCOUNTADMIN` to rerun provisioning or for billing.
 
