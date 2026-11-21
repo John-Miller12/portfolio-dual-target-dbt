@@ -1,8 +1,8 @@
 # Targets (design 02, B7; 02A section 5).
 # Credentials always come from env_var(), never from this file. Secrets use
 # the DBT_ENV_SECRET_ prefix so dbt scrubs them from logs.
-# Still to come in phase 3: snowflake_admin (PLATFORM_ADMIN),
-# snowflake_provision (ACCOUNTADMIN, one-time) and databricks_admin.
+# Still to come in phase 3: snowflake_admin (PLATFORM_ADMIN) and
+# databricks_admin.
 # Object-name defaults below are placeholders until accounts are set up
 # (design 03, D9 turns 3-4).
 
@@ -26,6 +26,17 @@ retail:
       database: "{{ env_var('SNOWFLAKE_DATABASE', 'RETAIL') }}"
       schema: main   # fallback only
       threads: 4
+
+    snowflake_provision:   # ACCOUNTADMIN, one-time: provision_platform_admin (02A section 5)
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_ADMIN_USER') }}"     # your own user, key pair (02A section 5)
+      private_key_path: "{{ env_var('SNOWFLAKE_ADMIN_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: "{{ env_var('DBT_ENV_SECRET_SNOWFLAKE_ADMIN_KEY_PASSPHRASE') }}"
+      role: ACCOUNTADMIN
+      database: SNOWFLAKE    # always exists; provisioning creates no objects in it
+      schema: INFORMATION_SCHEMA
+      threads: 1
 
     databricks:      # transformers principal (02A section 6)
       type: databricks
