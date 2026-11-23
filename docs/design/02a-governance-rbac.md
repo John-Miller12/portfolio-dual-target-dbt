@@ -1,6 +1,6 @@
 # Design 02A: Governance, RBAC and customer ID masking
 
-Status: **revision 7**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 added G10: `city` is dropped in staging. Revision 6 records the Snowflake account (2026-11-21), adds the cross-region inference setting to provisioning, and sets how people and dbt sign in (section 5). Revision 7 (2026-11-23) moves your own sign-in to the browser with MFA, so no secret is stored for your user. Because Snowflake blocks `ACCOUNTADMIN` from that sign-in, provisioning becomes a SQL script run in Snowsight instead of a dbt macro. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
+Status: **revision 8**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 added G10: `city` is dropped in staging. Revision 6 records the Snowflake account (2026-11-21), adds the cross-region inference setting to provisioning, and sets how people and dbt sign in (section 5). Revision 7 (2026-11-23) moves your own sign-in to the browser with MFA, so no secret is stored for your user. Because Snowflake blocks `ACCOUNTADMIN` from that sign-in, provisioning becomes a SQL script run in Snowsight instead of a dbt macro. Revision 8 (2026-11-23) records Snowflake provisioning as done, keeps the salt out of dbt's local files (section 4), lets `TRANSFORMER` create the seed tables in `raw` (section 6), and creates the function with `IF NOT EXISTS`. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
 
 This is a child of design 02. It covers who can see what on each platform, how customer IDs are hidden, and the one-time admin setup.
 
@@ -85,7 +85,9 @@ On every platform the function computes `sha2(salt || ':' || customer_id, 256)` 
 
 dbt allows secret environment variables only in `profiles.yml` and `packages.yml`, **not in model SQL**. A salt passed in through a normal `env_var()` would appear in compiled SQL under `target/`, in dbt logs and in the warehouse's query history. So **the salt never appears in model SQL.** Models call a function, and the function holds the salt.
 
-- **Setting it:** the salt is passed once, at bootstrap: `dbt run-operation bootstrap --target <platform>_admin --args '{salt: ...}'`, with the value taken from a local environment variable. It appears in that one admin query in query history, which only admins can see.
+- **Setting it:** the salt is passed once, at bootstrap: `dbt --log-level-file none run-operation bootstrap --no-write-json --target <platform>_admin --args "{salt: $SALT}"`, with `SALT` read into an unexported shell variable. It appears in that one admin query in query history, which only admins can see.
+- **Not in dbt's local files (revision 8).** *Checked:* by default dbt writes `--args` and the macro's SQL to `logs/dbt.log`, and the args to `target/run_results.json`, in plain text. `bootstrap()` refuses to run unless file logging is off and JSON output is disabled, and its own log lines show the salt as `<redacted>`.
+- **No silent rotation.** The function is created with `IF NOT EXISTS`, so rerunning bootstrap with a mistyped salt can't change every customer key. Rotating the salt means dropping the function on purpose, then rebuilding.
 - **Databricks (V3, resolved):** the salt is written into the function's definition. Databricks has a password-vault feature ("secret scopes") that SQL can read, which would keep the salt out of the function body, but it's an extra mechanism with uncertain Free Edition support. Not used. Limiting `EXECUTE` on the function to `transformers` keeps its body away from readers.
 - **Rotating it:** replace the function and rebuild. Every key changes together, and nothing stores keys between builds, so nothing breaks.
 
@@ -126,6 +128,9 @@ flowchart TD
 - **Roles:** `LOADER`, `TRANSFORMER` and `READER`, each granted to `PLATFORM_ADMIN` so the hierarchy stays intact.
 - **Users:** `SVC_PIPELINE` and `SVC_MCP`, created as `TYPE = SERVICE` with RSA public keys.
 - **The pseudonymize function:** `governance.pseudonymize()` as a secure UDF, with `USAGE` granted to `TRANSFORMER`.
+- **Service users** are created only when their public key is passed, so bootstrap can run before every key exists.
+
+**Snowflake provisioning: done 2026-11-23.** The script ran without errors. `SNOWFLAKE$LOCAL_APPLICATION` exists, and `PLATFORM_ADMIN`'s grants hold no `MANAGE GRANTS`.
 - **Grants and future grants:** as in section 6.
 
 **How people and dbt sign in (Snowflake):**
@@ -158,7 +163,7 @@ Whether service principals exist on Free Edition is V2. If they don't, bootstrap
 | Role | Used by | Privileges (granted by `PLATFORM_ADMIN`) |
 |---|---|---|
 | `LOADER` | dlt | `USAGE` on the warehouse and database. `USAGE` and `CREATE TABLE` on `raw`. Owns the raw tables. |
-| `TRANSFORMER` | dbt (CI, target `snowflake`) | `SELECT` on `raw`, plus future grants. `USAGE` and `CREATE TABLE` / `VIEW` / `SEMANTIC VIEW` on `staging`, `marts` and `semantic`. `USAGE` on `governance.pseudonymize()`. |
+| `TRANSFORMER` | dbt (CI, target `snowflake`) | `SELECT` on `raw`, plus future grants. `CREATE TABLE` on `raw` for the dbt seeds (`products`, `categories`), which it then owns (revision 8). `USAGE` and `CREATE TABLE` / `VIEW` / `SEMANTIC VIEW` on `staging`, `marts` and `semantic`. `USAGE` on `governance.pseudonymize()`. |
 | `READER` | MCP server | `USAGE` on the warehouse, the database and `semantic`. **`SELECT` on semantic views only**, granted per view by the `grant_reader()` post-hook. |
 
 | User | Auth | Default role | Also granted |
