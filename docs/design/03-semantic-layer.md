@@ -1,6 +1,6 @@
 # Design 03: Semantic layer (and a sketch of parity tests)
 
-Status: **revision 10. H1–H13 are decided** (approved 2026-11-17). D9 turns 1–2 are built. Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 recorded approval: H13 stays "before returns" for v1, and H11 is approved as proposed. Revision 7 recorded turn 1 as built and added the column check it showed is needed (S3, turn 2). Revision 8 recorded turn 2 as built. Revision 9 drops the semantic model's `name: sales` override. The semantic model is now `fct_order_lines`, and `sales` names only the model that builds `semantic.sales`. Revision 10 records the Snowflake account and H10's outcome.
+Status: **revision 11. H1–H13 are decided** (approved 2026-11-17). D9 turns 1–2 are built. Section A revisits the phase 3 sketch from [design 02 §A](02-dbt-models.md) using findings checked on 2026-11-16. Section B sketches phase 4. Section C turns what the phase 4 sketch found into phase 3 requirements. Section D is the phase 3 design. Revisions 3–5 removed the sort columns and `city`, made `return_reason` a dimension, justified the ratio denominators and added a unit-based return rate. Revision 6 recorded approval: H13 stays "before returns" for v1, and H11 is approved as proposed. Revision 7 recorded turn 1 as built and added the column check it showed is needed (S3, turn 2). Revision 8 recorded turn 2 as built. Revision 9 drops the semantic model's `name: sales` override. The semantic model is now `fct_order_lines`, and `sales` names only the model that builds `semantic.sales`. Revision 10 records the Snowflake account and H10's outcome. Revision 11 follows 02A revision 7: provisioning is a Snowsight script, your dbt sign-in is browser plus MFA, and V11 checks it.
 
 Phases in this doc:
 
@@ -362,7 +362,7 @@ What's given up compared with option A:
 ### D7. Governance and setup on the real platforms
 
 Phase 3 also builds 02A's Snowflake and Databricks pieces:
-- `provision_platform_admin`, `bootstrap`, `pseudonymize` and `grant_reader`, for both platforms.
+- `provision_platform_admin` (a Snowsight script on Snowflake, 02A revision 7), `bootstrap`, `pseudonymize` and `grant_reader`, for both platforms.
 - Setup in the order from 02A §7.
 
 Two additions from this design:
@@ -400,7 +400,7 @@ Two additions from this design:
    - **Databricks YAML strings are double-quoted by a small helper.** dbt-databricks quotes the table names. *Checked:* the compiled YAML parses, with 14 dimensions, 15 measures and 2 joins.
    - **Names:** the semantic model takes its model's name (`fct_order_lines`), and `sales` names only the model that builds `semantic.sales`. Revision 8 had both named `sales`, which made `dbt -s sales` select both. Dropping the override left the compiled output unchanged on both platforms (*checked*: identical files).
    - **Moved to turn 3:** the `dbt_semantic_view` package, `copy_grants`, and the `grant_reader()` post-hook. They only matter once there's an account to run against.
-3. **Snowflake.** Sign up (H10), `provision_platform_admin`, `bootstrap`, load, then build the marts and `semantic.sales`. Query it as `READER`.
+3. **Snowflake.** Sign up (H10), run `provision_platform_admin.sql` in Snowsight, `bootstrap`, load, then build the marts and `semantic.sales`. Query it as `READER`.
 4. **Databricks.** Settle 02A V2, bootstrap, load, then build the marts and `semantic.sales`. Query it as the reader.
 5. **Close out phase 3.** Update this doc as built, then design 04 (parity and CI).
 
@@ -413,3 +413,4 @@ Two additions from this design:
 | V8 | `::DATE` and `NULLIF` inside metric-view `expr` | `CAST(... AS DATE)` |
 | V10 | Cortex Analyst (step 3d) and the managed MCP server (phase 5) work on this trial account in `ca-central-1` with cross-region inference | Query the semantic view through plain SQL in the demo, or move to a natively supported region |
 | V9 | `AI_VERIFIED_QUERIES` syntax, so golden questions can feed it (phase 4 or 5) | Skip verified queries on Snowflake |
+| V11 | dbt's browser sign-in (`oauth_authorization_code`) works on this account: `SNOWFLAKE$LOCAL_APPLICATION` exists, your MFA is asked for, and tokens are cached between runs (step 3b) | If MFA isn't asked for, require it on your user and recheck. If the integration is missing, a key pair on your user until it rolls out |

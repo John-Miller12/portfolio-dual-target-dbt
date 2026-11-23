@@ -1,6 +1,6 @@
 # Design 02A: Governance, RBAC and customer ID masking
 
-Status: **revision 6**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 added G10: `city` is dropped in staging. Revision 6 records the Snowflake account (2026-11-21), adds the cross-region inference setting to provisioning, and sets how people and dbt sign in (section 5). V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
+Status: **revision 7**. G1–G10 are decided. Revision 4 added G9, where the name `governance` may live in the dbt project. Revision 5 added G10: `city` is dropped in staging. Revision 6 records the Snowflake account (2026-11-21), adds the cross-region inference setting to provisioning, and sets how people and dbt sign in (section 5). Revision 7 (2026-11-23) moves your own sign-in to the browser with MFA, so no secret is stored for your user. Because Snowflake blocks `ACCOUNTADMIN` from that sign-in, provisioning becomes a SQL script run in Snowsight instead of a dbt macro. V1, V3 and V4 are resolved, V5 is deferred, and V2 has a cost-based fallback.
 
 This is a child of design 02. It covers who can see what on each platform, how customer IDs are hidden, and the one-time admin setup.
 
@@ -91,21 +91,21 @@ dbt allows secret environment variables only in `profiles.yml` and `packages.yml
 
 ## 5. Admin model: a scoped platform-admin role (G6)
 
-**Principle:** whoever does admin work, in Snowsight or through dbt, should spend as little time as possible in high-trust roles. `ACCOUNTADMIN` is used **once**, for one macro, and a scoped role does everything after that.
+**Principle:** whoever does admin work, in Snowsight or through dbt, should spend as little time as possible in high-trust roles. `ACCOUNTADMIN` is used **once**, for one script, and a scoped role does everything after that.
 
 ### Snowflake: three levels of trust
 
 ```mermaid
 flowchart TD
-  AA["ACCOUNTADMIN<br/>target: snowflake_provision<br/>one-time"] -->|"provision_platform_admin()"| PA
+  AA["ACCOUNTADMIN<br/>Snowsight worksheet<br/>one-time"] -->|"provision_platform_admin.sql"| PA
   PA["PLATFORM_ADMIN<br/>target: snowflake_admin<br/>daily admin role in Snowsight"] -->|"bootstrap()"| OBJ["database · schemas · roles<br/>service users · grants<br/>pseudonymize()"]
   PA -.->|"owns, grants"| L["LOADER · dlt"]
-  PA -.->|"owns, grants"| T["TRANSFORMER · dbt<br/>target: snowflake (CI)"]
+  PA -.->|"owns, grants"| T["TRANSFORMER · dbt<br/>target: snowflake (you)<br/>CI target in phase 4"]
   PA -.->|"owns, grants"| RD["READER · MCP"]
   SYS["SYSADMIN"] -->|"inherits"| PA
 ```
 
-**`provision_platform_admin()`**, run once as `ACCOUNTADMIN` through the `snowflake_provision` target. It does only what genuinely needs `ACCOUNTADMIN`:
+**`admin/snowflake/provision_platform_admin.sql`**, run once as `ACCOUNTADMIN` in a Snowsight worksheet. It does only what genuinely needs `ACCOUNTADMIN`:
 
 | Step | Why it needs ACCOUNTADMIN |
 |---|---|
@@ -114,7 +114,7 @@ flowchart TD
 | Create the warehouse (X-Small, `AUTO_SUSPEND = 60`) and a **resource monitor** that caps monthly credits, then hand the warehouse's ownership to `PLATFORM_ADMIN` | Only `ACCOUNTADMIN` can create resource monitors and attach them to a warehouse. Doing it here means `PLATFORM_ADMIN` never needs `CREATE WAREHOUSE`. |
 | `ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'AWS_US'` | The account is in AWS `ca-central-1`, where Cortex Analyst isn't hosted natively ([docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst)). Cross-region inference lets it run there. Data stays stored in Canada; only each request's payload is processed in a US region, briefly. Account parameters are `ACCOUNTADMIN`-only, and `PLATFORM_ADMIN` deliberately can't set them. |
 
-**The macro prints before it runs.** `provision_platform_admin` takes `dry_run` (default `true`), which only logs the statements. Every statement is idempotent (`IF NOT EXISTS`, or a re-applied grant or setting), so a rerun is safe.
+**Why a script, not a dbt macro.** dbt signs you in through the browser (below), and Snowflake blocks `ACCOUNTADMIN` as the primary role of that sign-in. Unblocking it takes an account-wide setting or a Support request, which would widen the high-trust surface to save one paste. You read the script before running it, which replaces the macro's dry run. Every statement is idempotent (`IF NOT EXISTS`, or a re-applied grant or setting), so a rerun is safe.
 
 **The resource monitor caps warehouse compute only.** Cortex Analyst and other serverless features bill separately and aren't stopped by it. They're watched through the trial's credit balance.
 
@@ -129,10 +129,11 @@ flowchart TD
 - **Grants and future grants:** as in section 6.
 
 **How people and dbt sign in (Snowflake):**
-- **You, in Snowsight:** password plus MFA, enrolled in Snowsight. This is also the fallback when key-pair sign-in isn't available.
-- **You, through dbt** (`snowflake_provision` as `ACCOUNTADMIN`, `snowflake_admin` as `PLATFORM_ADMIN`): a key pair on your own user, with the private key encrypted by a passphrase. The key's path and passphrase come from environment variables; the passphrase uses the `DBT_ENV_SECRET_` prefix so dbt keeps it out of logs. Key-pair sign-in doesn't use MFA, by design.
-- **dbt's browser sign-in** (`authenticator: externalbrowser`) is single sign-on through an identity provider (SAML). This account has no identity provider, so it isn't used.
-- **Service users** (`SVC_PIPELINE`, `SVC_MCP`): key pairs only. `TYPE = SERVICE` can't use a password.
+- **You, in Snowsight:** password plus MFA, enrolled in Snowsight. `ACCOUNTADMIN` work happens only here.
+- **You, through dbt** (`snowflake_admin` as `PLATFORM_ADMIN`, `snowflake` as `TRANSFORMER`): browser sign-in through Snowflake's built-in OAuth for local applications (`authenticator: oauth_authorization_code`, the `SNOWFLAKE$LOCAL_APPLICATION` integration). dbt opens Snowflake's sign-in page, where your password and MFA apply, and the connector caches the tokens in the macOS keychain. No key, password or client secret is stored for your user. ([docs](https://docs.snowflake.com/en/user-guide/oauth-local-applications))
+- **Not used:** `externalbrowser` needs single sign-on through an identity provider (SAML), which this account doesn't have. `username_password_mfa` would put your password in an environment variable.
+- **Blocked by Snowflake:** `ACCOUNTADMIN`, `SECURITYADMIN` and `ORGADMIN` can't be the primary role of an OAuth sign-in. We keep that default.
+- **Service users** (`SVC_PIPELINE`, `SVC_MCP`): key pairs only. They run without a person present, so they can't use a browser, and `TYPE = SERVICE` can't use a password.
 
 **After provisioning,** your day-to-day role in Snowsight is `PLATFORM_ADMIN`. You only switch to `ACCOUNTADMIN` to rerun provisioning or for billing.
 
@@ -190,7 +191,7 @@ sequenceDiagram
 
   Note over A,W: One-time
   A->>W: Sign up (Snowflake Standard trial · Databricks Free Edition)
-  A->>W: provision_platform_admin() as ACCOUNTADMIN (Databricks: UI setup)
+  A->>W: provision_platform_admin.sql as ACCOUNTADMIN in Snowsight (Databricks: UI setup)
   A->>W: bootstrap(salt) as PLATFORM_ADMIN / platform_admins
   Note right of W: schemas, runtime roles,<br/>service users, grants,<br/>pseudonymize()
 
@@ -228,7 +229,7 @@ sequenceDiagram
 | G3 | Salt location | **Inside a warehouse function**, created at bootstrap. DuckDB uses an environment variable. |
 | G4 | Semantic exposure | **`customer_count` only.** No customer key dimension. |
 | G5 | How raw masks are applied | ~~An `on-run-start` hook~~. **Superseded by G8**, because there are no raw masks to apply. |
-| G6 | Admin role | **Scoped `PLATFORM_ADMIN`**, provisioned once by `ACCOUNTADMIN` through a dedicated macro and target (section 5) |
+| G6 | Admin role | **Scoped `PLATFORM_ADMIN`**, provisioned once by `ACCOUNTADMIN` through a script run in Snowsight (section 5; a dbt macro until revision 7) |
 | G7 | Exact age | **Dropped in staging.** Only `age_band` goes downstream. |
 | **G8** | **Dynamic masking on raw** | **Dropped on both platforms.** Raw is protected by grants, and the phase 4 access check enforces that. This supersedes G5. |
 | **G9** | **Where the name `governance` lives in the dbt project** | **Either `macros/governance/` or `models/governance/`, never both.** It's the macros folder today. If governance-owned models are ever needed, the governance folder moves or is renamed so the name still points to one place in the project. The warehouse schema `governance`, which holds the pseudonymize function, deliberately shares the name with whichever folder it is. |
@@ -242,4 +243,4 @@ sequenceDiagram
 | V2 | **Does Databricks Free Edition let us create (a) groups and (b) service principals?** We need them so that CI, MCP and bootstrap each get their own limited identity, instead of everything running as your all-powerful admin user. The Free Edition docs don't say. | Without groups, grant privileges to the identities directly. Without service principals, CI and bootstrap run with your token, and MCP uses a second invited user if allowed. Otherwise MCP also uses your token, and the reader restriction can't be demonstrated on Databricks. **Preferred fallback:** if Free Edition lacks these, use a paid Databricks workspace (trial or pay-as-you-go). Cost guidance: acceptable if setup plus minimal running stays under about $50 CAD. If ongoing upkeep is too high, capture screenshots and recordings of the working system, then decommission it. It must be shown working live at least once. |
 | ~~V3~~ | ~~`secret()` inside a function~~ | **Resolved:** the salt goes in the function body, with `EXECUTE` limited to `transformers` |
 | ~~V4~~ | ~~Masks through semantic views~~ | **Resolved, it doesn't matter:** everything the semantic layer touches is already pseudonymous (control ①) |
-| V5 *(deferred to account setup)* | Snowflake: can `PLATFORM_ADMIN` do everything `bootstrap()` needs without `MANAGE GRANTS`? This includes future grants in schemas it owns, granting roles it created, and `CREATE USER ... TYPE = SERVICE`. | Add the specific missing privilege to `provision_platform_admin()`, never `MANAGE GRANTS` as a blanket fix |
+| V5 *(deferred to account setup)* | Snowflake: can `PLATFORM_ADMIN` do everything `bootstrap()` needs without `MANAGE GRANTS`? This includes future grants in schemas it owns, granting roles it created, and `CREATE USER ... TYPE = SERVICE`. | Add the specific missing privilege to `provision_platform_admin.sql`, never `MANAGE GRANTS` as a blanket fix |
