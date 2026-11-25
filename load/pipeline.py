@@ -9,6 +9,7 @@ checksum columns. Any mismatch exits non-zero.
 
 import argparse
 import csv
+import os
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -89,6 +90,20 @@ def main() -> None:
     if target == "duckdb":
         DUCKDB_PATH.parent.mkdir(exist_ok=True)
         destination = dlt.destinations.duckdb(credentials=str(DUCKDB_PATH))
+    elif target == "snowflake":
+        # You, as LOADER, through the same browser sign-in and env vars as
+        # dbt (02A sections 5-6). No secret is stored. CI's key-pair loader
+        # comes in phase 4.
+        destination = dlt.destinations.snowflake(
+            credentials={
+                "host": os.environ["SNOWFLAKE_ACCOUNT"],
+                "username": os.environ["SNOWFLAKE_USER"],
+                "authenticator": "oauth_authorization_code",
+                "role": "LOADER",
+                "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "RETAIL_WH"),
+                "database": os.environ.get("SNOWFLAKE_DATABASE", "RETAIL"),
+            }
+        )
     else:
         destination = target  # credentials from env vars / .dlt/secrets.toml
 
