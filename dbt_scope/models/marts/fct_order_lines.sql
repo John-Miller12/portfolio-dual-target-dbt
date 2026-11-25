@@ -78,6 +78,8 @@ select
     return_reason,
     return_category,
     (case when is_returned then net_amount else 0 end)::DECIMAL(18, 2)
-                                                as returned_net_amount
+                                                as returned_net_amount,
+    (case when is_returned then quantity else 0 end)::INTEGER
+                                                as returned_quantity
 
 from amounts

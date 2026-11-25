@@ -14,6 +14,10 @@ models:
     marts:
       +schema: marts
       +materialized: table
+    semantic:      # design 03, D2. Built on Snowflake and Databricks only (R8).
+      +schema: semantic
+      +enabled: "{{ target.type in ['snowflake', 'databricks'] }}"
+      +materialized: "{{ 'semantic_view' if target.type == 'snowflake' else 'metric_view' }}"
 
 seeds:
   retail:
