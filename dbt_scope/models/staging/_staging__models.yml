@@ -8,6 +8,7 @@ models:
         description: Salted SHA-256 pseudonym of the raw customer_id (02A section 3).
         data_tests: [unique, not_null]
       - name: gender
+        description: Customer gender as recorded.
         data_tests:
           - accepted_values:
               arguments:
@@ -20,29 +21,38 @@ models:
               arguments:
                 values: ['18-24', '25-34', '35-44', '45-54', '55-64', '65+']
       - name: region
+        description: Geographic region of the customer. The only location attribute kept.
         data_tests:
           - accepted_values:
               arguments:
                 values: [Aegean, Black Sea, Central Anatolia, Marmara, Mediterranean]
       - name: customer_segment
+        description: Customer tier.
         data_tests:
           - accepted_values:
               arguments:
                 values: [Premium, Standard, VIP]
+      - name: sign_up_date
+        description: Date the customer signed up.
 
   - name: stg_orders
     description: One row per order.
     columns:
       - name: order_id
+        description: Order identifier from the source system.
         data_tests: [unique, not_null]
       - name: customer_key
+        description: Pseudonymous key of the ordering customer (02A section 3).
         data_tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('stg_customers')
                 field: customer_key
+      - name: order_date
+        description: Date the order was placed.
       - name: ordered_at
+        description: Date and time the order was placed (no time zone).
         data_tests: [not_null]
 
   - name: stg_order_details
@@ -52,6 +62,7 @@ models:
         description: order_id || '-' || product_id.
         data_tests: [unique, not_null]
       - name: order_id
+        description: Order the line belongs to.
         data_tests:
           - not_null
           - relationships:
@@ -59,14 +70,28 @@ models:
                 to: ref('stg_orders')
                 field: order_id
       - name: product_id
+        description: Product on the line.
         data_tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('stg_products')
                 field: product_id
+      - name: quantity
+        description: Units on the line.
+      - name: unit_cost
+        description: Cost per unit.
+      - name: unit_price
+        description: List price per unit, before discount.
+      - name: discount_rate
+        description: Discount as a fraction of list price (0 to 0.4 in this data).
       - name: is_returned
+        description: True if the line was returned. Returns are always whole lines.
         data_tests: [not_null]
+      - name: returned_at
+        description: Date and time of the return (no time zone). NULL unless is_returned.
+      - name: return_reason
+        description: The specific reason given for the return. NULL unless is_returned.
       - name: return_category
         description: >
           Groups the 29 return reasons by cause (design 02, B4). NULL unless is_returned. Unpleasant Odor (meat)
@@ -86,8 +111,12 @@ models:
     description: One row per product.
     columns:
       - name: product_id
+        description: Product identifier from the source system.
         data_tests: [unique, not_null]
+      - name: product_name
+        description: Product name.
       - name: category_id
+        description: Category the product belongs to.
         data_tests:
           - not_null
           - relationships:
@@ -99,4 +128,7 @@ models:
     description: One row per product category.
     columns:
       - name: category_id
+        description: Category identifier from the source system.
         data_tests: [unique, not_null]
+      - name: category_name
+        description: Category name.

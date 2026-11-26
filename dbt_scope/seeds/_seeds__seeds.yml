@@ -12,8 +12,10 @@ seeds:
         CATEGORY_NAME: string
     columns:
       - name: CATEGORY_ID
+        description: Category identifier.
         data_tests: [unique, not_null]
       - name: CATEGORY_NAME
+        description: Category name.
         data_tests: [unique, not_null]
 
   - name: products
@@ -25,10 +27,13 @@ seeds:
         CATEGORY_ID: string
     columns:
       - name: PRODUCT_ID
+        description: Product identifier.
         data_tests: [unique, not_null]
       - name: PRODUCT_NAME
+        description: Product name.
         data_tests: [not_null]
       - name: CATEGORY_ID
+        description: Category the product belongs to.
         data_tests:
           - not_null
           - relationships:

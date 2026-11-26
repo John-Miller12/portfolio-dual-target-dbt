@@ -30,17 +30,22 @@ models:
         dimension:
           type: categorical
           config: {meta: {synonyms: [customer tier, segment]}}
+      - name: sign_up_date
+        description: Date the customer signed up.
 
   - name: dim_products
     description: One row per product, with its category name folded in.
     semantic_model: true
     columns:
       - name: product_id
+        description: Product identifier from the source system.
         data_tests: [unique, not_null]
         entity: {type: primary, name: product}
       - name: product_name
         description: Product name.
         dimension: {type: categorical}
+      - name: category_id
+        description: Category identifier from the source system.
       - name: category_name
         description: Product category (10 categories).
         data_tests: [not_null]
@@ -70,8 +75,10 @@ models:
         data_tests: [unique, not_null]
         entity: {type: primary, name: order_line}
       - name: order_id
+        description: Order the line belongs to.
         data_tests: [not_null]
       - name: customer_key
+        description: Pseudonymous key of the ordering customer (02A section 3).
         data_tests:
           - not_null
           - relationships:
@@ -80,6 +87,7 @@ models:
                 field: customer_key
         entity: {type: foreign, name: customer}
       - name: product_id
+        description: Product on the line.
         data_tests:
           - not_null
           - relationships:
@@ -97,8 +105,16 @@ models:
                 field: date_day
         granularity: day
         dimension: {type: time}
+      - name: ordered_at
+        description: Date and time the order was placed (no time zone).
       - name: quantity
         description: Units on the line.
+      - name: unit_price
+        description: List price per unit, before discount.
+      - name: unit_cost
+        description: Cost per unit.
+      - name: discount_rate
+        description: Discount as a fraction of list price (0 to 0.4 in this data).
       - name: gross_amount
         description: quantity * unit_price.
       - name: discount_amount
@@ -112,6 +128,8 @@ models:
       - name: is_returned
         description: True if the line was returned. Returns are always whole lines.
         dimension: {type: categorical}
+      - name: returned_at
+        description: Date and time of the return (no time zone). NULL unless is_returned.
       - name: returned_net_amount
         description: net_amount when the line was returned, else 0.
       - name: returned_quantity
@@ -264,5 +282,6 @@ models:
       standard_granularity_column: date_day
     columns:
       - name: date_day
+        description: The calendar day.
         granularity: day
         data_tests: [unique, not_null]
