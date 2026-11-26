@@ -225,3 +225,6 @@ __marimo__/
 *.duckdb.wal
 .dlt/secrets.toml
 .user.yml
+
+# dbt packages (installed by dbt deps; package-lock.yml is committed)
+dbt_packages/

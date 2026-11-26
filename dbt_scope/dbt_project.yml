@@ -23,6 +23,8 @@ models:
       +schema: semantic
       +enabled: "{{ target.type in ['snowflake', 'databricks'] }}"
       +materialized: "{{ 'semantic_view' if target.type == 'snowflake' else 'metric_view' }}"
+      +copy_grants: true   # READER keeps SELECT across the replace (Snowflake)
+      +post-hook: "{{ grant_reader() }}"   # and gets it on first build (02A section 6)
 
 seeds:
   retail:

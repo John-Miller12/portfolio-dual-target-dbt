@@ -1,0 +1,5 @@
+packages:
+  - name: dbt_semantic_view
+    package: Snowflake-Labs/dbt_semantic_view
+    version: 1.0.6
+sha1_hash: 270ac9949212a90525eda62721b82ace04035304
